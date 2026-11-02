@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -76,7 +76,7 @@ function closeSheet() { $('#sheet').hidden = true; }
 $('#sheet').addEventListener('pointerdown', e => { if (e.target.id === 'sheet') closeSheet(); });
 
 const player = id => S.players.find(p => p.id === id);
-const isOut = p => p.outDate === today();
+const isOut = p => !!p.out;
 const here = () => S.players.filter(p => !isOut(p));
 function initials(p) {
   if (!p) return '?';
@@ -105,7 +105,7 @@ function renderRoster() {
   const has = k => here().filter(p => p.pos[k]).length;
   $('#main').innerHTML = `<div class="pad">
     <div class="row"><h2 class="grow">Roster</h2><button class="btn pri" data-a="add">Add player</button></div>
-    <div class="counts small"><span>${inn} in today</span><span class="${st > 5 ? 'warn' : ''}">${st} of 5 starters</span><span>${has('pg')} PG</span><span>${has('w')} wings</span><span>${has('p')} posts</span></div>
+    <div class="counts small"><span>${inn} in</span><span class="${st > 5 ? 'warn' : ''}">${st} of 5 starters</span><span>${has('pg')} PG</span><span>${has('w')} wings</span><span>${has('p')} posts</span></div>
     <div class="rtable">${P.map(p => `<div class="rrow ${isOut(p) ? 'isout' : ''}" data-id="${p.id}">
       <div class="ini">${esc(initials(p))}</div>
       <input type="text" data-f="name" value="${esc(p.name)}" aria-label="Name">
@@ -116,7 +116,7 @@ function renderRoster() {
         <button class="chip ${p.pos.p ? 'on' : ''}" data-pos="p" aria-pressed="${!!p.pos.p}">Post</button>
       </div>
       <button class="chip star ${p.starter ? 'on' : ''}" data-a="starter" aria-pressed="${!!p.starter}">Starter</button>
-      <button class="chip out ${isOut(p) ? 'on' : ''}" data-a="out" aria-pressed="${isOut(p)}">${isOut(p) ? 'Out today' : 'In'}</button>
+      <button class="chip out ${isOut(p) ? 'on' : ''}" data-a="out" aria-pressed="${isOut(p)}">${isOut(p) ? 'Out' : 'In'}</button>
       <button class="x" data-a="del" aria-label="Remove ${esc(p.name)}">×</button></div>`).join('') || '<p class="mute">Add your players to get started. Names stay on this iPad.</p>'}</div></div>`;
   $('#main').onclick = e => {
     const row = e.target.closest('.rrow'), p = row && player(row.dataset.id), b = e.target.closest('button');
@@ -132,7 +132,7 @@ function renderRoster() {
   $('#main').onchange = e => { const row = e.target.closest('.rrow'); if (!row || !e.target.dataset.f) return; player(row.dataset.id)[e.target.dataset.f] = e.target.value.trim() || (e.target.dataset.f === 'name' ? 'Player' : ''); save(); render(); };
 }
 function setOut(p, out) {
-  p.outDate = out ? today() : null;
+  p.out = out;
   if (out) removeFromCourt(p);
 }
 
@@ -152,7 +152,7 @@ function applyLineup(lineup, kind) {
 }
 function startGame(carry) {
   const prev = S.game;
-  if (here().length < 5) return toast('You need at least 5 players in today.');
+  if (here().length < 5) return toast('You need at least 5 players marked In.');
   S.game = { credits: carry && prev ? clone(prev.credits) : {}, rots: [], lineup: null };
   ui.undo = [];
   const st = here().filter(p => p.starter);
@@ -162,7 +162,7 @@ function startGame(carry) {
 }
 function doSub() {
   const res = nextLineup();
-  if (!res) return toast('You need at least 5 players in today.');
+  if (!res) return toast('You need at least 5 players marked In.');
   snapshot(); applyLineup(res.lineup, 'sub');
   if (res.off) toast(`${res.off} player${res.off > 1 ? 's' : ''} out of position. Dashed tokens show who.`);
   render();
@@ -197,7 +197,7 @@ function renderGame() {
   if (!g) {
     const st = here().filter(p => p.starter);
     $('#main').innerHTML = `<div class="pad"><h2>Game</h2>
-      ${here().length < 5 ? `<p>You need at least 5 players in today. ${here().length} so far.</p><button class="btn pri" data-nav2="roster">Open roster</button>` :
+      ${here().length < 5 ? `<p>You need at least 5 players marked In. ${here().length} so far.</p><button class="btn pri" data-nav2="roster">Open roster</button>` :
         `<p>${st.length === 5 ? 'Starters: ' + st.map(p => esc(p.name)).join(', ') + '.' : `${st.length} of 5 starters set. The app fills the rest from who's in.`}</p><button class="btn gold" id="start" style="font-size:26px;min-height:64px;padding:0 28px">Start game</button>`}</div>`;
     const s = $('#start'); if (s) s.onclick = () => startGame(false);
     const r = $('[data-nav2]'); if (r) r.onclick = () => go('roster');
@@ -276,7 +276,7 @@ function playerSheet(p) {
   const g = S.game, n = g.credits[p.id] || 0;
   sheet(`<h3>${esc(p.name)}</h3><p class="mute">${posText(p)}. ${cr(n)} rotation${n === 1 ? '' : 's'} played.</p>
     <div class="row"><button class="btn" id="m">Take off half</button><button class="btn" id="pl">Add half</button></div>
-    <button class="btn danger" id="o">Mark out for today</button><button class="btn" id="c">Close</button>`);
+    <button class="btn danger" id="o">Mark out</button><button class="btn" id="c">Close</button>`);
   $('#m').onclick = () => { snapshot(); g.credits[p.id] = Math.max(0, n - .5); save(); closeSheet(); render(); };
   $('#pl').onclick = () => { snapshot(); g.credits[p.id] = n + .5; save(); closeSheet(); render(); };
   $('#o').onclick = () => { setOut(p, true); save(); closeSheet(); render(); };
