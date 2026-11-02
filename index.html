@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tipoff">
+<meta name="theme-color" content="#14284B">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Tipoff Basketball</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand" id="teamName">Grizzlies</div>
+  <nav>
+    <button data-nav="game">Game</button>
+    <button data-nav="roster">Roster</button>
+    <button data-nav="plays">Plays</button>
+    <button data-nav="board">Board</button>
+    <button data-nav="setup">Setup</button>
+  </nav>
+</header>
+<main id="main"></main>
+<div id="sheet" class="sheet" hidden><div class="sheet-card" id="sheetCard"></div></div>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="file" hidden>
+<script src="rotation.js"></script>
+<script src="court.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
