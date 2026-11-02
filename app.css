@@ -12,6 +12,9 @@ h1,h2,h3{margin:0;font-weight:800;line-height:1.05}
 h2{font-size:30px}h3{font-size:21px}
 .top{background:var(--navy);color:#fff;display:flex;align-items:center;gap:16px;padding:calc(env(safe-area-inset-top) + 8px) 16px 0;flex:none}
 .brand{font-weight:800;font-size:26px;color:var(--gold);padding-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mark{height:44px;width:auto;margin:-2px -8px 6px 0;flex:none}
+.pregame{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px}
+.biglogo{width:min(420px,80vw);max-height:52vh;object-fit:contain}
 .top nav{margin-left:auto;display:flex;gap:2px}
 .top nav button{padding:8px 14px 12px;font-weight:700;font-size:20px;border-radius:8px 8px 0 0;color:#D5DCE8}
 .top nav button.on{background:var(--paper);color:var(--navy)}
@@ -141,7 +144,8 @@ label{font-size:17px}
   .rrow{grid-template-columns:50px 1fr 56px 36px}
   .rrow .chipset{grid-column:span 2}
   .top nav button{padding:6px 8px 10px;font-size:17px}
-  .brand{font-size:20px}
+  .brand{display:none}
+  .mark{height:36px}
   .tok{width:58px;height:58px;font-size:23px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}

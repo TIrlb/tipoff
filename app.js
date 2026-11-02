@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -196,7 +196,7 @@ function renderGame() {
   const g = S.game;
   if (!g) {
     const st = here().filter(p => p.starter);
-    $('#main').innerHTML = `<div class="pad"><h2>Game</h2>
+    $('#main').innerHTML = `<div class="pad pregame"><img class="biglogo" src="logo-full.png" alt="${esc(S.team)} logo">
       ${here().length < 5 ? `<p>You need at least 5 players marked In. ${here().length} so far.</p><button class="btn pri" data-nav2="roster">Open roster</button>` :
         `<p>${st.length === 5 ? 'Starters: ' + st.map(p => esc(p.name)).join(', ') + '.' : `${st.length} of 5 starters set. The app fills the rest from who's in.`}</p><button class="btn gold" id="start" style="font-size:26px;min-height:64px;padding:0 28px">Start game</button>`}</div>`;
     const s = $('#start'); if (s) s.onclick = () => startGame(false);
