@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.0.2';
+const APP_VERSION = '1.0.3';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;

@@ -14,7 +14,7 @@ h2{font-size:30px}h3{font-size:21px}
 .brand{font-weight:800;font-size:26px;color:var(--gold);padding-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mark{height:44px;width:auto;margin:-2px -8px 6px 0;flex:none}
 .pregame{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px}
-.biglogo{width:min(420px,80vw);max-height:52vh;object-fit:contain}
+.biglogo{width:min(210px,40vw);max-height:26vh;object-fit:contain}
 .top nav{margin-left:auto;display:flex;gap:2px}
 .top nav button{padding:8px 14px 12px;font-weight:700;font-size:20px;border-radius:8px 8px 0 0;color:#D5DCE8}
 .top nav button.on{background:var(--paper);color:var(--navy)}
