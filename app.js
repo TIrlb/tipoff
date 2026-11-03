@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -387,6 +387,7 @@ function drawView(tokOverride, ballOverride, hideArrows) {
   (p.pen || []).forEach(s => { h += `<path d="${Court.smooth(s)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4" stroke-linecap="round"/>`; });
   if (!hideArrows) Court.actionPaths(p, k).forEach(({ a, pts }) => { h += Court.arrow(a.type, pts, r); });
   const pos = tokOverride || st.pos;
+  Object.entries(st.screens).forEach(([id, ang]) => { h += Court.screenMark(pos[id], ang, r); });
   p.tokens.forEach(t => { h += Court.token(t, pos[t.id], r, { label: liveLabel(t) }); });
   if (ballOverride) h += Court.ballMark(ballOverride, 0);
   else if (st.ball && pos[st.ball]) h += Court.ballMark(pos[st.ball], r);
@@ -413,6 +414,7 @@ function flipPlay(p) {
 }
 function animate(p, k, done) {
   const paths = Court.actionPaths(p, k), st = Court.stateAt(p, k), start = performance.now(), step = p.steps[k];
+  const movers = new Set(paths.filter(x => x.a.type !== 'pass').map(x => x.a.tok));
   const T = stepTiming(step, paths), items = paths.map(x => ({ ...x, s: Court.sample(x.pts) })), pass = items.find(x => x.a.type === 'pass');
   const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2, clamp = t => Math.min(1, Math.max(0, t));
   const r = Court.R(p.court);
@@ -423,7 +425,10 @@ function animate(p, k, done) {
       else if (x.a.type !== 'pass') pos[x.a.tok] = Court.at(x.s, ease(clamp((ms - T.moveStart) / T.moveDur)));
     });
     // while the screen is being set, show what comes next
-    const waiting = ms < T.moveStart ? items.filter(x => x.a.type !== 'screen').map(x => Court.arrow(x.a.type, x.pts, r)).join('') : '';
+    /* a screener's T stays until they move again, and travels with them on the way to a new screen */
+    let waiting = '';
+    Object.entries(st.screens).forEach(([id, ang]) => { if (!movers.has(id)) waiting += Court.screenMark(pos[id], ang, r); });
+    items.forEach(x => { if (x.a.type === 'screen') { const ang = Court.endAngle(x.pts); if (ang != null) waiting += Court.screenMark(pos[x.a.tok], ang, r); } });
     if (pass) {
       const from = pos[pass.a.tok], to = pos[pass.a.to], pt = clamp((ms - T.passStart) / (T.passEnd - T.passStart));
       const xy = pt <= 0 ? null : [from[0] + (to[0] - from[0]) * pt, from[1] + (to[1] - from[1]) * pt];
@@ -697,6 +702,7 @@ function drawEdit(live) {
   (p.pen || []).forEach((s, i) => { h += `<g data-pen="${i}"><path d="${Court.smooth(s)}" fill="none" stroke="transparent" stroke-width="3"/><path d="${Court.smooth(s)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4" stroke-linecap="round"/></g>`; });
   if (!ui.atStart) Court.actionPaths(p, k).forEach(({ a, pts }) => { h += Court.arrow(a.type, pts, r, { id: a.id, opacity: ui.sel && a.id !== ui.sel ? .45 : 1 }); });
   if (live && live.type !== 'none') h += live.type === 'pen' ? `<path d="${Court.smooth(live.pts)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4"/>` : Court.arrow(live.type, live.pts, r);
+  Object.entries(st.screens).forEach(([id, ang]) => { h += Court.screenMark(st.pos[id], ang, r); });
   p.tokens.forEach(t => { h += Court.token(t, (live && live.drag === t.id) ? live.at : st.pos[t.id], r, { label: tokLabel(t) }); });
   if (st.ball && st.pos[st.ball]) h += Court.ballMark((live && live.drag === st.ball) ? live.at : st.pos[st.ball], r);
   if (!ui.atStart) handlesFor(p, k).forEach(q => { h += `<circle cx="${f(q.at[0])}" cy="${f(q.at[1])}" r="1.15" class="hd"/>`; });
@@ -709,7 +715,7 @@ function bindEdit() {
   svg.onpointerdown = e => {
     e.preventDefault(); svg.setPointerCapture(e.pointerId);
     const k = ui.step, st = Court.stateAt(p, k), xy = toW(e), r = Court.R(p.court), tool = ui.tool;
-    const hit = nearest(xy, st.pos, r * 1.8);
+    const hit = nearest(xy, st.pos, r * 2.4);
     let mv, up;
     const finish = () => { svg.onpointermove = mv; svg.onpointerup = svg.onpointercancel = ev => { svg.onpointermove = svg.onpointerup = svg.onpointercancel = null; up(ev); }; };
     /* drag a white dot to reshape the selected arrow */

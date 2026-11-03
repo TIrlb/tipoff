@@ -4,7 +4,7 @@
   const PAD = 6;
   const dims = c => c === 'full' ? { w: 94, h: 50 } : { w: 50, h: 47 };
   const viewBox = c => { const d = dims(c); return `${-PAD} ${-PAD} ${d.w + PAD * 2} ${d.h + PAD * 2}`; };
-  const R = c => c === 'full' ? 2.3 : 2.1;
+  const R = c => c === 'full' ? 1.725 : 1.575;
   const COLOR = { cut: '#14284B', pass: '#B3261E', dribble: '#1B6E4B', screen: '#6A2C91', pen: '#14284B' };
 
   /* One end of the floor, hoop at top */
@@ -104,18 +104,34 @@
     return `<g${op}${data} class="arrow">${o.id ? `<path d="M${s.map(p => f(p[0]) + ' ' + f(p[1])).join('L')}" fill="none" stroke="transparent" stroke-width="3"/>` : ''}${line}${tip}</g>`;
   }
 
+  function endAngle(pts) {
+    const s = sample(pts), n = s.length; if (n < 2) return null;
+    const a = s[Math.max(0, n - 4)], b = s[n - 1];
+    return Math.hypot(b[0] - a[0], b[1] - a[1]) < .01 ? null : Math.atan2(b[1] - a[1], b[0] - a[0]);
+  }
+  /* The short purple T that stays with a screener, on the side they moved toward */
+  function screenMark(p, ang, r) {
+    const cx = Math.cos(ang), sy = Math.sin(ang), w = r * .95, d = r + .95;
+    const bx = p[0] + cx * d, by = p[1] + sy * d;
+    return `<g class="scrmark" stroke="${COLOR.screen}" stroke-linecap="round"><line x1="${f(p[0] + cx * r)}" y1="${f(p[1] + sy * r)}" x2="${f(bx)}" y2="${f(by)}" stroke-width=".55"/><line x1="${f(bx - sy * w)}" y1="${f(by + cx * w)}" x2="${f(bx + sy * w)}" y2="${f(by - cx * w)}" stroke-width=".65"/></g>`;
+  }
   /* Replay: where everyone stands after the first k steps. */
   function stateAt(play, k) {
     const pos = {}; play.tokens.forEach(t => { pos[t.id] = [t.x, t.y]; });
     let ball = play.ball || null;
+    const screens = {}; // tok -> direction, for players still standing where they set a screen
     for (let i = 0; i < k && i < play.steps.length; i++) {
       for (const a of play.steps[i].actions) {
         if (a.type === 'pass') continue;
-        if (pos[a.tok] && a.pts && a.pts.length) pos[a.tok] = a.pts[a.pts.length - 1].slice();
+        if (pos[a.tok] && a.pts && a.pts.length) {
+          delete screens[a.tok];
+          if (a.type === 'screen') { const ang = endAngle([pos[a.tok], ...a.pts.slice(a.pts.length > 1 ? 1 : 0)]); if (ang != null) screens[a.tok] = ang; }
+          pos[a.tok] = a.pts[a.pts.length - 1].slice();
+        }
       }
       for (const a of play.steps[i].actions) if (a.type === 'pass' && pos[a.to]) ball = a.to;
     }
-    return { pos, ball };
+    return { pos, ball, screens };
   }
   /* The path each action draws at step k, starting from where the player really is */
   function actionPaths(play, k) {
@@ -146,5 +162,5 @@
     return simplify(pts.slice(0, mi + 1), tol).slice(0, -1).concat(simplify(pts.slice(mi), tol));
   }
 
-  root.Court = { PAD, dims, viewBox, R, COLOR, floor, smooth, sample, at, arrow, stateAt, actionPaths, token, ballMark, esc, simplify, f };
+  root.Court = { endAngle, screenMark, PAD, dims, viewBox, R, COLOR, floor, smooth, sample, at, arrow, stateAt, actionPaths, token, ballMark, esc, simplify, f };
 })(this);
