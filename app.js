@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -356,13 +356,14 @@ function renderView() {
       <div class="dots" id="dots"></div>
       ${S.game ? `<button class="chip ${ui.useLineup ? 'on' : ''}" id="ul">Show current lineup</button>` : ''}
       ${legend()}
-      <div class="row" style="margin-top:auto"><button class="btn grow" id="ed">Edit play</button><button class="btn danger" id="dl">Delete</button></div>
+      <div class="row" style="margin-top:auto"><button class="btn grow" id="flip">Flip</button><button class="btn grow" id="ed">Edit play</button><button class="btn danger" id="dl">Delete</button></div>
     </div></div>`;
   drawView();
   $('#back').onclick = () => go('plays');
   $('#next').onclick = () => { if (ui.anim) return; if (ui.k < n) animate(p, ui.k, () => { ui.k++; drawView(); }); else { ui.k = 0; drawView(); } };
   $('#prev').onclick = () => { cancelAnim(); ui.k = Math.max(0, ui.k - 1); drawView(); };
   $('#re').onclick = () => { cancelAnim(); ui.k = 0; drawView(); };
+  $('#flip').onclick = () => { cancelAnim(); flipPlay(p); save(); drawView(); };
   $('#ed').onclick = () => openEdit(p);
   $('#dl').onclick = () => { sheet(`<h3>Delete ${esc(p.name)}?</h3><div class="row"><button class="btn danger" id="y">Delete</button><button class="btn" id="n">Keep</button></div>`); $('#y').onclick = () => { S.plays = S.plays.filter(x => x !== p); save(); closeSheet(); go('plays'); }; $('#n').onclick = closeSheet; };
   const ul = $('#ul'); if (ul) ul.onclick = () => { ui.useLineup = !ui.useLineup; renderView(); };
@@ -389,6 +390,14 @@ function stepTiming(step, x) {
   const scale = (matchMedia('(prefers-reduced-motion:reduce)').matches ? .001 : 1) / (step.speed || 1), D_M = 1300 * scale, D_P = 750 * scale;
   const moves = x.some(q => q.a.type !== 'pass'), hasPass = x.some(q => q.a.type === 'pass');
   return { screenDur: D_M, moveStart: 0, moveDur: D_M, passStart: moves ? .45 * D_M : 0, passEnd: moves ? D_M : D_P, total: moves ? D_M : (hasPass ? D_P : 1) };
+}
+/* Mirror the play to the other side of the floor. Half court flips left and right; full court flips across its length, still attacking the same hoop. */
+function flipPlay(p) {
+  const m = p.court === 'full' ? q => [q[0], f(50 - q[1])] : q => [f(50 - q[0]), q[1]];
+  p.tokens.forEach(t => { const [x, y] = m([t.x, t.y]); t.x = x; t.y = y; });
+  p.steps.forEach(st => st.actions.forEach(x => { x.pts = (x.pts || []).map(m); }));
+  p.pen = (p.pen || []).map(l => l.map(m));
+  if (p.underlay) { if (p.underFlip) delete p.underFlip; else p.underFlip = true; }
 }
 function animate(p, k, done) {
   const paths = Court.actionPaths(p, k), st = Court.stateAt(p, k), start = performance.now(), step = p.steps[k];
@@ -550,12 +559,13 @@ function renderEdit() {
         <div class="tray">${[1, 2, 3, 4, 5].map(i => `<button data-add="${i}">${i}</button>`).join('')}${[1, 2, 3, 4, 5].map(i => `<button class="d" data-add="X${i}">X${i}</button>`).join('')}</div>
         <div class="tray" style="margin-top:4px">${S.players.map(q => `<button data-pl="${q.id}" title="${esc(q.name)}">${esc(initials(q))}</button>`).join('')}</div>
       </div>
-      <div class="row"><button class="btn grow" id="eund">Undo</button>${board ? '' : '<button class="btn grow" id="traybtn">Players</button><button class="btn grow" id="pnotes">Notes</button><button class="btn grow" id="prevw">Play it</button>'}</div>
+      <div class="row"><button class="btn grow" id="eund">Undo</button><button class="btn grow" id="eflip">Flip</button>${board ? '' : '<button class="btn grow" id="traybtn">Players</button><button class="btn grow" id="pnotes">Notes</button><button class="btn grow" id="prevw">Play it</button>'}</div>
     </div></div>`;
   refreshEdit(); bindEdit(); bindSeq();
   const q = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { ui.tool = b.dataset.t; ui.atStart = false; refreshEdit(); });
   q('#eund', () => { const u = ui.undoEd && ui.undoEd.pop(); if (!u) return; const o = JSON.parse(u); Object.keys(p).forEach(k => delete p[k]); Object.assign(p, o); ui.step = Math.min(ui.step, Math.max(0, p.steps.length - 1)); persist(); refreshEdit(); });
+  q('#eflip', () => { editPush(); flipPlay(p); persist(); refreshEdit(); });
   q('#traybtn', () => { ui.tray = !ui.tray; $('#traybox').hidden = !ui.tray; });
   q('#prevw', () => { pruneEmpty(p); persist(); ui.k = 0; ui.view = 'view'; render(); });
   q('#hideu', () => { ui.hideU = !ui.hideU; renderEdit(); });
@@ -671,7 +681,7 @@ function handlesFor(p, k) {
 function drawEdit(live) {
   const p = ui.play, r = Court.R(p.court), k = ui.step, st = Court.stateAt(p, k), d = Court.dims(p.court);
   let h = Court.floor(p.court);
-  if (p.underlay && !ui.hideU) h += `<image href="${p.underlay}" x="0" y="0" width="${d.w}" height="${d.h}" opacity=".5" preserveAspectRatio="xMidYMid meet"/>`;
+  if (p.underlay && !ui.hideU) h += `<image href="${p.underlay}" x="0" y="0" width="${d.w}" height="${d.h}" opacity=".5" preserveAspectRatio="xMidYMid meet" ${p.underFlip ? `transform="${p.court === 'full' ? 'translate(0 50) scale(1 -1)' : 'translate(50 0) scale(-1 1)'}"` : ''}/>`;
   (p.pen || []).forEach((s, i) => { h += `<g data-pen="${i}"><path d="${Court.smooth(s)}" fill="none" stroke="transparent" stroke-width="3"/><path d="${Court.smooth(s)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4" stroke-linecap="round"/></g>`; });
   if (!ui.atStart) Court.actionPaths(p, k).forEach(({ a, pts }) => { h += Court.arrow(a.type, pts, r, { id: a.id, opacity: ui.sel && a.id !== ui.sel ? .45 : 1 }); });
   if (live && live.type !== 'none') h += live.type === 'pen' ? `<path d="${Court.smooth(live.pts)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4"/>` : Court.arrow(live.type, live.pts, r);
