@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -492,6 +492,18 @@ function dropAction(id, tgt) {
   ui.step = p.steps.indexOf(keep);
   persist(); refreshEdit();
 }
+/* Dropping a move above or below another in its own step means "run in this order", so the step splits */
+function splitInStep(id, targetId, above) {
+  const p = ui.play, src = findAction(id), st = p.steps[src.i];
+  const rest = st.actions.filter(x => x.id !== id), at = rest.findIndex(x => x.id === targetId) + (above ? 0 : 1);
+  const parts = [rest.slice(0, at), [src.a], rest.slice(at)].filter(x => x.length);
+  editPush();
+  const made = parts.map((actions, i) => { const n = { note: i === 0 ? st.note : '', actions }; if (st.speed) n.speed = st.speed; return n; });
+  p.steps.splice(src.i, 1, ...made);
+  ui.step = src.i + parts.findIndex(x => x[0].id === id); ui.sel = id;
+  persist(); refreshEdit();
+  toast('Now in that order. Each step is one tap of Next.');
+}
 function dropStep(i, gap) {
   const p = ui.play;
   if (gap === i || gap === i + 1) return;
@@ -603,8 +615,8 @@ function bindSeq() {
     const g = e.target.closest('[data-grip],[data-gripstep]'); if (!g) return;
     e.preventDefault();
     const isStep = g.dataset.gripstep != null, src = isStep ? g.closest('.stepcard') : g.closest('.act'), sx = e.clientX, sy = e.clientY;
-    let ghost = null, over = null, scroller = 0;
-    const clear = () => { if (over) over.classList.remove('hot'); over = null; };
+    let ghost = null, over = null, scroller = 0, inRow = 'top';
+    const clear = () => { if (over) over.classList.remove('hot', 'hot-top', 'hot-bot'); over = null; };
     const mv = ev => {
       if (!ghost) {
         if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
@@ -613,8 +625,18 @@ function bindSeq() {
       }
       ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px';
       const r = box.getBoundingClientRect(); scroller = ev.clientY < r.top + 30 ? -8 : ev.clientY > r.bottom - 30 ? 8 : 0;
-      const el = document.elementFromPoint(ev.clientX, ev.clientY), t = el && (el.closest('[data-gap]') || (isStep ? null : el.closest('[data-stepcard]')));
-      clear(); if (t) { over = t; t.classList.add('hot'); }
+      const el = document.elementFromPoint(ev.clientX, ev.clientY), home = isStep ? null : src.closest('.stepcard');
+      let t = el && (el.closest('[data-gap]') || (isStep ? null : el.closest('[data-stepcard]')));
+      clear();
+      if (t && t === home) {
+        // inside its own step: find the row above or below the drop point
+        const rows = [...home.querySelectorAll('.act')].filter(x => x !== src);
+        const row = rows.find(x => { const q = x.getBoundingClientRect(); return ev.clientY >= q.top - 8 && ev.clientY <= q.bottom + 8; });
+        if (!row) return;
+        const q = row.getBoundingClientRect(); inRow = ev.clientY < q.top + q.height / 2 ? 'top' : 'bot';
+        over = row; row.classList.add('hot-' + inRow); return;
+      }
+      if (t) { over = t; t.classList.add('hot'); }
     };
     const tick = setInterval(() => { if (scroller) box.scrollTop += scroller; }, 16);
     const up = () => {
@@ -624,7 +646,8 @@ function bindSeq() {
       ghost.remove(); src.classList.remove('dragging'); box.classList.remove('draggingseq');
       const t = over; clear();
       if (!t) return refreshEdit();
-      if (isStep) dropStep(+g.dataset.gripstep, +t.dataset.gap);
+      if (t.dataset.act) splitInStep(g.dataset.grip, t.dataset.act, inRow === 'top');
+      else if (isStep) dropStep(+g.dataset.gripstep, +t.dataset.gap);
       else dropAction(g.dataset.grip, t.dataset.gap != null ? { gap: +t.dataset.gap } : { join: +t.dataset.stepcard });
       refreshEdit();
     };
