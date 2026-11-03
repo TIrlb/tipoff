@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -397,12 +397,20 @@ function drawView(tokOverride, ballOverride, hideArrows) {
   $('#dots').innerHTML = p.steps.map((_, i) => `<button class="dot ${i === k ? 'on' : ''}" data-d="${i}" aria-label="Step ${i + 1}">${i + 1}</button>`).join('');
   $('#dots').onclick = e => { const d = e.target.closest('[data-d]'); if (d) { cancelAnim(); ui.k = +d.dataset.d; drawView(); } };
 }
-/* Everything in a step runs at the same time. A pass in the same step as a cut leads the receiver. */
+/* Everything in a step starts together and players move at one steady pace, so a long cut takes longer rather than running faster.
+   A pass in the same step leads the receiver: it lands as he arrives. */
 const SPEEDS = { 1: 'Normal', 0.6: 'Slow', 1.5: 'Fast' };
+const MOVE_PACE = 14, PASS_PACE = 30; // feet per second at Normal
+function pathLen(pts) { const q = Court.sample(pts); let l = 0; for (let i = 1; i < q.length; i++) l += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]); return l; }
 function stepTiming(step, x) {
-  const scale = (matchMedia('(prefers-reduced-motion:reduce)').matches ? .001 : 1) / (step.speed || 1), D_M = 1300 * scale, D_P = 750 * scale;
-  const moves = x.some(q => q.a.type !== 'pass'), hasPass = x.some(q => q.a.type === 'pass');
-  return { screenDur: D_M, moveStart: 0, moveDur: D_M, passStart: moves ? .45 * D_M : 0, passEnd: moves ? D_M : D_P, total: moves ? D_M : (hasPass ? D_P : 1) };
+  const scale = (matchMedia('(prefers-reduced-motion:reduce)').matches ? .001 : 1) / (step.speed || 1);
+  const durOf = q => Math.max(500, pathLen(q.pts) / MOVE_PACE * 1000) * scale;
+  const moves = x.filter(q => q.a.type !== 'pass'), pass = x.find(q => q.a.type === 'pass');
+  const movesEnd = moves.length ? Math.max(...moves.map(durOf)) : 0;
+  if (!pass) return { durOf, passStart: 0, passEnd: 0, total: moves.length ? movesEnd : 1 };
+  const passDur = Math.max(450, pathLen(pass.pts) / PASS_PACE * 1000) * scale;
+  const catcher = moves.find(q => q.a.tok === pass.a.to), passEnd = moves.length ? Math.max(catcher ? durOf(catcher) : movesEnd, passDur) : passDur;
+  return { durOf, passStart: passEnd - passDur, passEnd, total: Math.max(movesEnd, passEnd) };
 }
 /* Mirror the play to the other side of the floor. Half court flips left and right; full court flips across its length, still attacking the same hoop. */
 function flipPlay(p) {
@@ -416,13 +424,12 @@ function animate(p, k, done) {
   const paths = Court.actionPaths(p, k), st = Court.stateAt(p, k), start = performance.now(), step = p.steps[k];
   const movers = new Set(paths.filter(x => x.a.type !== 'pass').map(x => x.a.tok));
   const T = stepTiming(step, paths), items = paths.map(x => ({ ...x, s: Court.sample(x.pts) })), pass = items.find(x => x.a.type === 'pass');
-  const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2, clamp = t => Math.min(1, Math.max(0, t));
+  const R0 = .12, ease = t => t < R0 ? t * t / (2 * R0 * (1 - R0)) : t > 1 - R0 ? 1 - (1 - t) ** 2 / (2 * R0 * (1 - R0)) : (t - R0 / 2) / (1 - R0), clamp = t => Math.min(1, Math.max(0, t));
   const r = Court.R(p.court);
   const frame = now => {
     const ms = now - start, pos = { ...st.pos };
     items.forEach(x => {
-      if (x.a.type === 'screen') pos[x.a.tok] = Court.at(x.s, ease(clamp(ms / T.screenDur)));
-      else if (x.a.type !== 'pass') pos[x.a.tok] = Court.at(x.s, ease(clamp((ms - T.moveStart) / T.moveDur)));
+      if (x.a.type !== 'pass') pos[x.a.tok] = Court.at(x.s, ease(clamp(ms / T.durOf(x))));
     });
     // while the screen is being set, show what comes next
     /* a screener's T stays until they move again, and travels with them on the way to a new screen */
@@ -731,7 +738,7 @@ function bindEdit() {
       }
       return finish();
     }
-    if (tool === 'ball') { if (k !== 0) return toast('The ball is set in step 1. After that, draw passes.'); if (hit) { editPush(); p.ball = hit; persist(); refreshEdit(); } return; }
+    if (tool === 'ball') { if (k !== 0) return toast('The ball is set in step 1. After that, draw passes.'); if (hit) { editPush(); p.ball = hit; ui.tool = 'move'; persist(); refreshEdit(); } return; }
     if (tool === 'erase') {
       const el = document.elementFromPoint(e.clientX, e.clientY), ar = el && el.closest('[data-action]'), pn = el && el.closest('[data-pen]');
       if (ar) { editPush(); const fa = findAction(ar.dataset.action); p.steps[fa.i].actions.splice(fa.j, 1); }
