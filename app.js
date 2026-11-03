@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -66,7 +66,7 @@ function blank() {
 function newBoard() { return { id: 'board', name: 'Board', cat: 'half', court: 'half', tokens: [], ball: null, steps: [], pen: [], notes: '', seq: 2 }; }
 let S;
 try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* start fresh */ }
-if (!S) S = blank();
+if (!S) { S = blank(); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* will retry on the next save */ } }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { toast('Storage is full. Remove imported photos from plays, then try again.'); }
@@ -107,7 +107,19 @@ const cr = n => Number.isInteger(n) ? String(n) : String(+n.toFixed(1));
 /* ---------- navigation ---------- */
 function go(v) { ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
 document.querySelector('nav').addEventListener('click', e => { const b = e.target.closest('[data-nav]'); if (b) go(b.dataset.nav); });
+function rememberPage() { try { localStorage.setItem(KEY + '.page', JSON.stringify({ view: ui.view, play: ui.play && ui.play.id })); } catch (e) { /* not essential */ } }
+function restorePage() {
+  try {
+    const n = JSON.parse(localStorage.getItem(KEY + '.page')); if (!n) return;
+    if (n.view === 'view' || n.view === 'edit') {
+      const p = S.plays.find(x => x.id === n.play); if (!p) { ui.view = 'plays'; return; }
+      Object.assign(ui, { view: n.view, play: p, k: 0, step: 0, sel: null, atStart: false, tray: false, tool: 'move', undoEd: [], editBoard: false });
+    } else if (['game', 'roster', 'plays', 'board', 'setup'].includes(n.view)) ui.view = n.view;
+  } catch (e) { /* start on Game */ }
+}
 function render() {
+  rememberPage();
+  const ver = $('#ver'); ver.textContent = 'v' + APP_VERSION; ver.hidden = ui.view !== 'game';
   $('#teamName').textContent = S.team;
   const navOn = ui.view === 'view' || ui.view === 'edit' ? (ui.editBoard ? 'board' : 'plays') : ui.view;
   document.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('on', b.dataset.nav === navOn));
@@ -877,7 +889,7 @@ function playFromJSON(text) {
 /* ---------- setup ---------- */
 function renderSetup() {
   const st = S.settings;
-  $('#main').innerHTML = `<div class="pad"><h2>Setup</h2>
+  $('#main').innerHTML = `<div class="pad"><div class="row"><h2 class="grow">Setup</h2><span id="setupver">Version ${APP_VERSION}</span></div>
     <div class="card"><label>Team name<input type="text" id="tn" value="${esc(S.team)}"></label></div>
     <div class="card"><h3>When the Sub button can't do both</h3>
       <div class="chipset"><button class="chip ${st.fair === 'even' ? 'on' : ''}" data-fair="even">Even minutes first</button><button class="chip ${st.fair === 'position' ? 'on' : ''}" data-fair="position">Positions first</button></div>
@@ -896,7 +908,7 @@ function renderSetup() {
       <p class="small mute">Plays and the roster are saved here first and sync when online. Games and the Board stay on this device.</p>`}</div>
     <div class="card"><h3>Backup</h3><p class="small mute">Includes the current game, which exists only on this device.</p>
       <div class="row"><button class="btn" id="exp">Save backup</button><button class="btn" id="imb">Restore backup</button></div></div>
-    <p class="mute small">Version ${APP_VERSION}</p></div>`;
+    </div>`;
   $('#tn').onchange = e => { S.team = e.target.value.trim() || 'Team'; save(); render(); };
   $('#key').onchange = e => { st.apiKey = e.target.value.trim(); save(); };
   $('#mdl').onchange = e => { st.model = e.target.value.trim() || 'claude-sonnet-5-5'; save(); };
@@ -930,5 +942,15 @@ function renderSetup() {
 function noFill(root) { root.querySelectorAll('input,textarea').forEach(el => { el.setAttribute('autocomplete', 'off'); el.setAttribute('data-1p-ignore', ''); el.setAttribute('data-lpignore', 'true'); el.setAttribute('data-bwignore', ''); el.setAttribute('data-form-type', 'other'); }); }
 new MutationObserver(() => noFill(document)).observe(document.body, { childList: true, subtree: true });
 noFill(document);
+restorePage();
 render();
-if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && isSecureContext) {
+  /* When a new version finishes downloading, load it right away unless you're mid-edit in a pop-up */
+  const hadWorker = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadWorker || reloaded) return;
+    if (!$('#sheet').hidden || ['INPUT', 'TEXTAREA'].includes((document.activeElement || {}).tagName) || ui.anim) return toast('Update ready. Refresh to load it.');
+    reloaded = true; location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

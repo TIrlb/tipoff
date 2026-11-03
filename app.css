@@ -186,3 +186,7 @@ label{font-size:17px}
   .tok{width:58px;height:58px;font-size:23px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.ver{position:fixed;right:8px;bottom:calc(4px + env(safe-area-inset-bottom));font-size:14px;color:var(--mute);pointer-events:none;z-index:5}
+.ver[hidden]{display:none}
+#setupver{font-weight:700}
