@@ -69,6 +69,7 @@ window.Sync = (() => {
       if (deleted[p.id] >= (p.updatedAt || 0)) { delete c.base[p.id]; changedHere = true; return false; }
       delete deleted[p.id]; return true;
     });
+    S.plays.forEach(migratePlay);
     c.deleted = deleted;
     const out = { v: 1, plays: {}, deleted };
     S.plays.forEach(p => { out.plays[p.id] = form(p); });
