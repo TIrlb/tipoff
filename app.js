@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -107,7 +107,7 @@ const posText = p => [p.pos.pg && 'PG', p.pos.w && 'W', p.pos.p && 'P'].filter(B
 const cr = n => Number.isInteger(n) ? String(n) : String(+n.toFixed(1));
 
 /* ---------- navigation ---------- */
-function go(v) { ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
+function go(v) { cancelAnim(); resetLoop(); ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
 document.querySelector('nav').addEventListener('click', e => { const b = e.target.closest('[data-nav]'); if (b) go(b.dataset.nav); });
 function rememberPage() { try { localStorage.setItem(KEY + '.page', JSON.stringify({ view: ui.view, play: ui.play && ui.play.id })); } catch (e) { /* not essential */ } }
 function restorePage() {
@@ -115,7 +115,7 @@ function restorePage() {
     const n = JSON.parse(localStorage.getItem(KEY + '.page')); if (!n) return;
     if (n.view === 'view' || n.view === 'edit') {
       const p = S.plays.find(x => x.id === n.play); if (!p) { ui.view = 'plays'; return; }
-      Object.assign(ui, { view: n.view, play: p, k: 0, step: 0, sel: null, atStart: false, tray: false, tool: 'move', undoEd: [], editBoard: false });
+      Object.assign(ui, { round: 1, castHist: [], cast: null, view: n.view, play: p, k: 0, step: 0, sel: null, atStart: false, tray: false, tool: 'move', undoEd: [], editBoard: false });
     } else if (['game', 'roster', 'plays', 'board', 'setup'].includes(n.view)) ui.view = n.view;
   } catch (e) { /* start on Game */ }
 }
@@ -330,16 +330,26 @@ function renderPlays() {
     <div class="row"><h2 class="grow">Plays</h2><button class="btn" id="imp">Import from image</button><button class="btn pri" id="np">New play</button></div>
     <div class="small mute" id="syncstat">${window.Sync ? esc(Sync.status()) : ''}</div>
     <div class="chips" style="margin-top:10px">${Object.entries({ all: 'All', ...CATS }).map(([k, v]) => `<button class="chip ${ui.cat === k ? 'on' : ''}" data-c="${k}">${v}</button>`).join('')}</div>
-    <div class="pgrid">${list.map(p => `<button class="pcard" data-p="${p.id}">${thumb(p)}<b>${esc(p.name)}</b><span>${CATS[p.cat]}, ${p.steps.length} step${p.steps.length === 1 ? '' : 's'}</span></button>`).join('') || '<p class="mute">No plays of this type yet. Tap New play.</p>'}</div></div>`;
+    <div class="pgrid">${list.map(p => `<button class="pcard" data-p="${p.id}">${thumb(p)}<b>${esc(p.name)}</b><span>${CATS[p.cat]}, ${p.steps.length} step${p.steps.length === 1 ? '' : 's'}${p.loop ? ', loops' : ''}</span></button>`).join('') || '<p class="mute">No plays of this type yet. Tap New play.</p>'}</div></div>`;
   $('#main').onclick = e => {
     const c = e.target.closest('[data-c]'), q = e.target.closest('[data-p]');
     if (c) { ui.cat = c.dataset.c; render(); }
-    if (q) { ui.play = S.plays.find(x => x.id === q.dataset.p); ui.k = 0; ui.view = 'view'; render(); }
+    if (q) { ui.play = S.plays.find(x => x.id === q.dataset.p); ui.k = 0; resetLoop(); ui.view = 'view'; render(); }
   };
   $('#np').onclick = () => {
-    sheet(`<h3>New play</h3><input type="text" id="nm" placeholder="Play name"><select id="ct">${Object.entries(CATS).map(([k, v]) => `<option value="${k}" ${ui.cat === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    const sorted = S.plays.slice().sort((x, y) => x.name.localeCompare(y.name));
+    sheet(`<h3>New play</h3><input type="text" id="nm" placeholder="Play name">
+      <label>Start from<select id="src"><option value="">Blank play</option>${sorted.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
+      <label>Type<select id="ct">${Object.entries(CATS).map(([k, v]) => `<option value="${k}" ${ui.cat === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <div class="row"><button class="btn pri" id="ok">Create</button><button class="btn" id="no">Cancel</button></div>`);
+    $('#src').onchange = e => {
+      const from = S.plays.find(x => x.id === e.target.value), ct = $('#ct');
+      if (from) ct.value = from.cat;
+      [...ct.options].forEach(o => { o.disabled = !!from && courtFor(o.value) !== from.court; });
+    };
     $('#ok').onclick = () => {
+      const from = S.plays.find(x => x.id === $('#src').value);
+      if (from) { const c = clonePlay(from, $('#nm').value.trim(), $('#ct').value); closeSheet(); return openEdit(c); }
       const cat = $('#ct').value, p = { id: uid(), name: $('#nm').value.trim() || 'New play', cat, court: courtFor(cat), notes: '', tokens: slotTokens(cat), ball: 't1', steps: [{ note: '', actions: [] }], pen: [], seq: 2 };
       S.plays.unshift(p); save(); closeSheet(); openEdit(p);
     };
@@ -347,7 +357,7 @@ function renderPlays() {
   };
   $('#imp').onclick = importSheet;
 }
-function openEdit(p) { ui.play = p; ui.step = 0; ui.sel = null; ui.atStart = false; ui.tray = false; ui.tool = 'move'; ui.undoEd = []; ui.view = 'edit'; ui.editBoard = false; render(); }
+function openEdit(p) { cancelAnim(); resetLoop(); ui.play = p; ui.step = 0; ui.sel = null; ui.atStart = false; ui.tray = false; ui.tool = 'move'; ui.undoEd = []; ui.view = 'edit'; ui.editBoard = false; render(); }
 
 /* legend & tool glyphs share the real arrow renderer so they always match */
 function glyph(type) { return `<svg viewBox="0 0 12 4" aria-hidden="true">${Court.arrow(type, [[0.3, 2], [11.7, 2]], 0)}</svg>`; }
@@ -383,7 +393,8 @@ function passerSheet(after) {
   sheet(`<h3>Who inbounds?</h3>${Object.values(five).map(id => `<button class="btn ${id === S.passer ? 'gold' : ''}" data-pa="${id}">${esc(player(id).name)}</button>`).join('')}<button class="btn" data-pa="">No passer</button>`);
   document.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => { S.passer = b.dataset.pa || null; save(); closeSheet(); after(); });
 }
-const liveLabel = tokLabel;
+/* During a loop the spots stay fixed and the kids rotate through them: cast maps a spot's token to whoever is in it now */
+const liveLabel = t => { const id = ui.cast && ui.cast[t.id], who = id && ui.play.tokens.find(x => x.id === id); return tokLabel(who || t); };
 function renderView() {
   const p = ui.play, n = p.steps.length;
   $('#main').innerHTML = `<div class="stage">
@@ -394,23 +405,103 @@ function renderView() {
       <div class="cap" id="cap"></div>
       <button class="nextbtn" id="next">Next</button>
       <div class="row"><button class="btn grow" id="prev">Back</button><button class="btn grow" id="re">Restart</button></div>
+      <div class="row"><button class="btn grow" id="auto">Auto play</button><button class="chip grow ${p.loop ? 'on' : ''}" id="loop" aria-pressed="${!!p.loop}">Loop ${p.loop ? 'on' : 'off'}</button></div>
+      <div class="small warn" id="loopmsg"></div>
       <div class="dots" id="dots"></div>
       ${ui.five ? `<div class="key">${[1, 2, 3, 4, 5].map(n => { const k = player(playFive(p)[TOKEN_SLOT[n]]); return `<span><b>${n}</b> ${SLOT_LABEL[TOKEN_SLOT[n]]}: ${esc(k ? k.name : '?')}</span>`; }).join('')}</div>
       ${p.cat === 'slob' || p.cat === 'blob' ? `<div class="row small"><span class="grow">Passer: <b>${passerOn(ui.five) ? esc(player(S.passer).name) : 'none on the floor'}</b></span><button class="chip" id="pas">Change</button></div>` : ''}
       <button class="chip" id="ul">${S.settings.numbers ? 'Show player initials' : 'Show numbers'}</button>` : ''}
       ${legend()}
-      <div class="row" style="margin-top:auto"><button class="btn grow" id="flip">Flip</button><button class="btn grow" id="ed">Edit play</button><button class="btn danger" id="dl">Delete</button></div>
+      <div class="row" style="margin-top:auto"><button class="btn grow" id="flip">Flip</button><button class="btn grow" id="clone">Clone</button><button class="btn grow" id="ed">Edit</button><button class="btn danger" id="dl">Delete</button></div>
     </div></div>`;
   drawView();
   $('#back').onclick = () => go('plays');
-  $('#next').onclick = () => { if (ui.anim) return; if (ui.k < n) animate(p, ui.k, () => { ui.k++; drawView(); }); else { ui.k = 0; drawView(); } };
-  $('#prev').onclick = () => { cancelAnim(); ui.k = Math.max(0, ui.k - 1); drawView(); };
-  $('#re').onclick = () => { cancelAnim(); ui.k = 0; drawView(); };
-  $('#flip').onclick = () => { cancelAnim(); flipPlay(p); save(); drawView(); };
+  $('#next').onclick = () => { stopAuto(); viewNext(); };
+  $('#prev').onclick = () => {
+    cancelAnim(); stopAuto();
+    if (ui.k === 0 && ui.castHist.length) { ui.cast = ui.castHist.pop(); ui.round--; ui.k = n - 1; }
+    else ui.k = Math.max(0, ui.k - 1);
+    drawView();
+  };
+  $('#re').onclick = () => { cancelAnim(); resetLoop(); ui.k = 0; drawView(); };
+  $('#auto').onclick = () => {
+    if (ui.auto) return stopAuto();
+    if (ui.anim) return;
+    if (ui.k >= n) ui.k = 0;
+    ui.auto = true; const b = $('#auto'); b.textContent = 'Stop'; b.classList.add('on'); autoTick();
+  };
+  $('#loop').onclick = () => { cancelAnim(); stopAuto(); if (p.loop) delete p.loop; else p.loop = true; resetLoop(); ui.k = 0; save(); renderView(); };
+  $('#clone').onclick = () => { cancelAnim(); const c = clonePlay(p); toast('Cloned. Rename it with a tap on the name.'); openEdit(c); };
+  $('#flip').onclick = () => { cancelAnim(); stopAuto(); flipPlay(p); save(); drawView(); };
   $('#ed').onclick = () => openEdit(p);
   $('#dl').onclick = () => { sheet(`<h3>Delete ${esc(p.name)}?</h3><div class="row"><button class="btn danger" id="y">Delete</button><button class="btn" id="n">Keep</button></div>`); $('#y').onclick = () => { S.plays = S.plays.filter(x => x !== p); save(); closeSheet(); go('plays'); }; $('#n').onclick = closeSheet; };
   const pas = $('#pas'); if (pas) pas.onclick = () => passerSheet(renderView);
   const ul = $('#ul'); if (ul) ul.onclick = () => { S.settings.numbers = !S.settings.numbers; save(); renderView(); };
+}
+/* Can this play repeat? Everyone has to finish on a starting spot, with the ball back at the spot it started from. */
+const LOOP_TOL = 8;
+function checkLoop(p) {
+  if (!p.steps.some(st => st.actions.length)) return { ok: false, msg: 'Add some moves first.' };
+  const end = Court.stateAt(p, p.steps.length), pairs = [];
+  p.tokens.forEach(a => p.tokens.forEach(b => { pairs.push({ a: a.id, b: b.id, d: Math.hypot(end.pos[a.id][0] - b.x, end.pos[a.id][1] - b.y) }); }));
+  pairs.sort((x, y) => x.d - y.d);
+  const to = {}, taken = new Set();
+  pairs.forEach(q => { if (!(q.a in to) && !taken.has(q.b)) { to[q.a] = q.b; taken.add(q.b); q.used = true; } });
+  const worst = pairs.filter(q => q.used).sort((x, y) => y.d - x.d)[0];
+  const name = id => tokLabel(p.tokens.find(t => t.id === id));
+  if (worst && worst.d > LOOP_TOL) return { ok: false, msg: `${name(worst.a)} finishes ${Math.round(worst.d)} ft from an open starting spot.` };
+  if (p.ball && to[end.ball] !== p.ball) return { ok: false, msg: 'The ball has to finish at the spot it started from.' };
+  return { ok: true, to, endPos: end.pos };
+}
+function resetLoop() { ui.cast = null; ui.round = 1; ui.castHist = []; stopAuto(); }
+function stopAuto() { ui.auto = false; clearTimeout(ui.autoT); const b = $('#auto'); if (b) { b.textContent = 'Auto play'; b.classList.remove('on'); } }
+/* Run the next step; on a looping play, finishing the last one starts the next round with the kids in their new spots */
+function viewNext(done) {
+  const p = ui.play, n = p.steps.length;
+  if (ui.anim) return;
+  if (ui.k >= n) { ui.k = 0; drawView(); if (done) done(); return; }
+  animate(p, ui.k, () => {
+    ui.k++;
+    const lp = ui.k === n && p.loop ? checkLoop(p) : null;
+    if (!lp || !lp.ok) { drawView(); if (done) done(); return; }
+    settle(p, lp, () => {
+      const old = ui.cast || {}, cast = {};
+      ui.castHist.push(ui.cast);
+      p.tokens.forEach(t => { cast[lp.to[t.id]] = old[t.id] || t.id; });
+      ui.cast = cast; ui.round++; ui.k = 0; drawView(); if (done) done();
+    });
+  });
+}
+/* A short glide closes any small gap between where players finished and the exact starting spots */
+function settle(p, lp, done) {
+  const start = performance.now(), dur = matchMedia('(prefers-reduced-motion:reduce)').matches ? 1 : 300, target = {};
+  p.tokens.forEach(t => { const b = p.tokens.find(x => x.id === lp.to[t.id]); target[t.id] = [b.x, b.y]; });
+  const ballTok = Court.stateAt(p, p.steps.length).ball;
+  const frame = now => {
+    const u = Math.min(1, (now - start) / dur), pos = {};
+    p.tokens.forEach(t => { const a = lp.endPos[t.id], c = target[t.id]; pos[t.id] = [a[0] + (c[0] - a[0]) * u, a[1] + (c[1] - a[1]) * u]; });
+    drawViewBall(pos, null, ballTok);
+    if (u < 1) ui.anim = requestAnimationFrame(frame); else { ui.anim = null; done(); }
+  };
+  ui.anim = requestAnimationFrame(frame);
+}
+function autoTick() {
+  if (!ui.auto) return;
+  const p = ui.play;
+  viewNext(() => {
+    if (!ui.auto) return;
+    if (ui.k >= p.steps.length) return stopAuto();
+    ui.autoT = setTimeout(autoTick, 700);
+  });
+}
+function clonePlay(src, name, cat) {
+  const c = clone(src);
+  ['sample', 'created', 'updatedAt', 'underlay', 'underFlip', 'uncertain'].forEach(k => delete c[k]);
+  c.id = uid(); c.name = name || `${src.name} copy`; if (cat) c.cat = cat;
+  const ids = {}; c.tokens.forEach(t => { ids[t.id] = t.id; });
+  c.steps.forEach(st => st.actions.forEach(x => { x.id = uid(); }));
+  S.plays.unshift(c); save();
+  return c;
 }
 function cancelAnim() { if (ui.anim) { cancelAnimationFrame(ui.anim); ui.anim = null; } }
 function drawView(tokOverride, ballOverride, hideArrows) {
@@ -424,10 +515,11 @@ function drawView(tokOverride, ballOverride, hideArrows) {
   if (ballOverride) h += Court.ballMark(ballOverride, 0);
   else if (st.ball && pos[st.ball]) h += Court.ballMark(pos[st.ball], r);
   $('#cv').innerHTML = h;
-  $('#cap').innerHTML = k < n ? `<b>Step ${k + 1} of ${n}</b>${esc(p.steps[k].note) || 'Tap Next to run this step.'}` : `<b>Finished</b>${n ? 'Tap Next to run it again.' : 'This play has no steps yet.'}`;
+  const lm = $('#loopmsg'); if (lm) { const c = p.loop ? checkLoop(p) : null; lm.textContent = c && !c.ok ? `Can't loop yet. ${c.msg}` : ''; }
+  $('#cap').innerHTML = k < n ? `<b>${p.loop && ui.round > 1 ? `Round ${ui.round}, step` : 'Step'} ${k + 1} of ${n}</b>${esc(p.steps[k].note) || 'Tap Next to run this step.'}` : `<b>Finished</b>${n ? 'Tap Next to run it again.' : 'This play has no steps yet.'}`;
   const nb = $('#next'); nb.textContent = k < n ? 'Next' : 'Run again';
   $('#dots').innerHTML = p.steps.map((_, i) => `<button class="dot ${i === k ? 'on' : ''}" data-d="${i}" aria-label="Step ${i + 1}">${i + 1}</button>`).join('');
-  $('#dots').onclick = e => { const d = e.target.closest('[data-d]'); if (d) { cancelAnim(); ui.k = +d.dataset.d; drawView(); } };
+  $('#dots').onclick = e => { const d = e.target.closest('[data-d]'); if (d) { cancelAnim(); stopAuto(); ui.k = +d.dataset.d; drawView(); } };
 }
 /* Everything in a step starts together and players move at one steady pace, so a long cut takes longer rather than running faster.
    A pass in the same step leads the receiver: it lands as he arrives. */
