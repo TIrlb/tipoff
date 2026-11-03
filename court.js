@@ -88,7 +88,7 @@
       const h = 1.9, sp = .48;
       tip = `<path d="M${f(b[0])} ${f(b[1])}L${f(b[0] - h * Math.cos(ang - sp))} ${f(b[1] - h * Math.sin(ang - sp))}L${f(b[0] - h * Math.cos(ang + sp))} ${f(b[1] - h * Math.sin(ang + sp))}Z" fill="${col}"/>`;
     }
-    const body = type === 'screen' || type === 'cut' ? s : s.slice(0, Math.max(2, n - 3));
+    const body = type === 'screen' ? s : s.slice(0, Math.max(2, n - 3));
     if (type === 'dribble') {
       const L = length(body), N = Math.max(8, Math.round(L * 3)), wave = [];
       for (let i = 0; i <= N; i++) {

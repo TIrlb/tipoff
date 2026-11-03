@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.7.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -107,7 +107,7 @@ const posText = p => [p.pos.pg && 'PG', p.pos.w && 'W', p.pos.p && 'P'].filter(B
 const cr = n => Number.isInteger(n) ? String(n) : String(+n.toFixed(1));
 
 /* ---------- navigation ---------- */
-function go(v) { cancelAnim(); resetLoop(); ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
+function go(v) { cancelAnim(); resetLoop(); ui.huddle = false; document.body.classList.remove('huddle'); ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
 document.querySelector('nav').addEventListener('click', e => { const b = e.target.closest('[data-nav]'); if (b) go(b.dataset.nav); });
 function rememberPage() { try { localStorage.setItem(KEY + '.page', JSON.stringify({ view: ui.view, play: ui.play && ui.play.id })); } catch (e) { /* not essential */ } }
 function restorePage() {
@@ -357,7 +357,7 @@ function renderPlays() {
   };
   $('#imp').onclick = importSheet;
 }
-function openEdit(p) { cancelAnim(); resetLoop(); ui.play = p; ui.step = 0; ui.sel = null; ui.atStart = false; ui.tray = false; ui.tool = 'move'; ui.undoEd = []; ui.view = 'edit'; ui.editBoard = false; render(); }
+function openEdit(p) { cancelAnim(); resetLoop(); ui.huddle = false; document.body.classList.remove('huddle'); ui.play = p; ui.step = 0; ui.sel = null; ui.atStart = false; ui.tray = false; ui.tool = 'move'; ui.undoEd = []; ui.view = 'edit'; ui.editBoard = false; render(); }
 
 /* legend & tool glyphs share the real arrow renderer so they always match */
 function glyph(type) { return `<svg viewBox="0 0 12 4" aria-hidden="true">${Court.arrow(type, [[0.3, 2], [11.7, 2]], 0)}</svg>`; }
@@ -395,15 +395,37 @@ function passerSheet(after) {
 }
 /* During a loop the spots stay fixed and the kids rotate through them: cast maps a spot's token to whoever is in it now */
 const liveLabel = t => { const id = ui.cast && ui.cast[t.id], who = id && ui.play.tokens.find(x => x.id === id); return tokLabel(who || t); };
+/* Huddle view frames just the part of the floor the play uses, so the action is as big as the screen allows */
+function huddleBox(p) {
+  const pts = p.tokens.map(t => [t.x, t.y]);
+  p.steps.forEach((st, k) => { Object.values(Court.stateAt(p, k + 1).pos).forEach(q => pts.push(q)); st.actions.forEach(a => (a.pts || []).forEach(q => pts.push(q))); });
+  const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]), full = p.court === 'full', d = Court.dims(p.court), m = 4;
+  const x0 = Math.min(-1, ...xs.map(v => v - m)), x1 = Math.max(d.w + 1, ...xs.map(v => v + m));
+  const y0 = Math.min(-1, ...ys.map(v => v - m)), y1 = full ? Math.max(d.h + 1, ...ys.map(v => v + m)) : Math.min(d.h + 1, Math.max(30, ...ys.map(v => v + m)));
+  return `${f(x0)} ${f(y0)} ${f(x1 - x0)} ${f(y1 - y0)}`;
+}
+function setHuddle(on) {
+  ui.huddle = on;
+  document.body.classList.toggle('huddle', on);
+  const el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen, ex = document.exitFullscreen || document.webkitExitFullscreen;
+  try {
+    if (on && req) { const r = req.call(el); if (r && r.catch) r.catch(() => {}); }
+    else if (!on && ex && (document.fullscreenElement || document.webkitFullscreenElement)) { const r = ex.call(document); if (r && r.catch) r.catch(() => {}); }
+  } catch (e) { /* the view still fills the app without it */ }
+  renderView();
+}
 function renderView() {
   const p = ui.play, n = p.steps.length;
+  document.body.classList.toggle('huddle', !!ui.huddle);
   $('#main').innerHTML = `<div class="stage">
-    <div class="board"><svg id="cv" viewBox="${Court.viewBox(p.court)}" preserveAspectRatio="xMidYMid meet"></svg></div>
+    <div id="hbar"><button class="btn" id="hexit">Exit</button><div class="grow" id="hcap"></div><button class="btn" id="hback">Back</button><button class="btn" id="hre">Restart</button></div>
+    <div class="board"><svg id="cv" viewBox="${ui.huddle ? huddleBox(p) : Court.viewBox(p.court)}" preserveAspectRatio="xMidYMid meet"></svg></div>
     <div class="side">
       <div class="row"><div class="title grow">${esc(p.name)}</div><button class="btn" id="back">Plays</button></div>
       <div class="mute small">${CATS[p.cat]}${p.notes ? '. ' + esc(p.notes) : ''}</div>
       <div class="cap" id="cap"></div>
       <button class="nextbtn" id="next">Next</button>
+      <button class="btn gold" id="hgo">Huddle view</button>
       <div class="row"><button class="btn grow" id="prev">Back</button><button class="btn grow" id="re">Restart</button></div>
       <div class="row"><button class="btn grow" id="auto">Auto play</button><button class="chip grow ${p.loop ? 'on' : ''}" id="loop" aria-pressed="${!!p.loop}">Loop ${p.loop ? 'on' : 'off'}</button></div>
       <div class="small warn" id="loopmsg"></div>
@@ -416,6 +438,11 @@ function renderView() {
     </div></div>`;
   drawView();
   $('#back').onclick = () => go('plays');
+  $('#hgo').onclick = () => { cancelAnim(); stopAuto(); setHuddle(true); };
+  $('#hexit').onclick = () => { cancelAnim(); stopAuto(); setHuddle(false); };
+  $('#hback').onclick = () => $('#prev').click();
+  $('#hre').onclick = () => $('#re').click();
+  $('#cv').onclick = () => { if (ui.huddle) { stopAuto(); viewNext(); } };
   $('#next').onclick = () => { stopAuto(); viewNext(); };
   $('#prev').onclick = () => {
     cancelAnim(); stopAuto();
@@ -515,6 +542,7 @@ function drawView(tokOverride, ballOverride, hideArrows) {
   if (ballOverride) h += Court.ballMark(ballOverride, 0);
   else if (st.ball && pos[st.ball]) h += Court.ballMark(pos[st.ball], r);
   $('#cv').innerHTML = h;
+  const hc = $('#hcap'); if (hc) hc.innerHTML = k < n ? `<b>${esc(p.name)}</b> ${p.loop && ui.round > 1 ? `Round ${ui.round}, step` : 'Step'} ${k + 1} of ${n}${p.steps[k].note ? ': ' + esc(p.steps[k].note) : ''}` : `<b>${esc(p.name)}</b> Finished. Tap the court to run it again.`;
   const lm = $('#loopmsg'); if (lm) { const c = p.loop ? checkLoop(p) : null; lm.textContent = c && !c.ok ? `Can't loop yet. ${c.msg}` : ''; }
   $('#cap').innerHTML = k < n ? `<b>${p.loop && ui.round > 1 ? `Round ${ui.round}, step` : 'Step'} ${k + 1} of ${n}</b>${esc(p.steps[k].note) || 'Tap Next to run this step.'}` : `<b>Finished</b>${n ? 'Tap Next to run it again.' : 'This play has no steps yet.'}`;
   const nb = $('#next'); nb.textContent = k < n ? 'Next' : 'Run again';

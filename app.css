@@ -195,3 +195,13 @@ label{font-size:17px}
 .key span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 .tpass{background:var(--gold);color:var(--navy);font-size:14px;font-weight:800;padding:0 6px;border-radius:6px}
+
+#hbar{display:none}
+.huddle .top,.huddle .side,.huddle .ver{display:none!important}
+.huddle .stage{display:flex;flex-direction:column;padding:0;gap:0;height:100%;background:var(--navy)}
+.huddle main{background:var(--navy)}
+.huddle #hbar{display:flex;align-items:center;gap:8px;flex:none;padding:calc(env(safe-area-inset-top) + 4px) 8px 4px;background:var(--paper)}
+.huddle #hbar .btn{min-height:40px;padding:4px 12px}
+.huddle #hcap{font-size:19px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.huddle .board{flex:1;min-height:0;border-radius:0;cursor:pointer}
+.huddle .board svg{height:100%;max-height:none;touch-action:manipulation}
