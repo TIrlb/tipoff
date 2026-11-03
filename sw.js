@@ -1,5 +1,5 @@
 // Offline cache. Bump CACHE and APP_VERSION (app.js) together on every release.
-const CACHE = 'tipoff-v1.2.2';
+const CACHE = 'tipoff-v1.3.0';
 const ASSETS = ['./','index.html','app.css','rotation.js','court.js','app.js','sync.js','manifest.webmanifest','bc-600.woff2','bc-700.woff2','bc-800.woff2','logo-mark.png','logo-full.png','icon-180.png','icon-192.png','icon-512.png'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));

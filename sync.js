@@ -1,6 +1,6 @@
-/* Play sync. Plays live in localStorage first, so the app always works offline.
-   When connected, they are merged with plays.json in a private GitHub repo, one play at a time: newest edit wins.
-   The roster, games, the Board and API keys never go up; kid-specific tokens go up without initials. */
+/* Play and roster sync. Everything lives in localStorage first, so the app always works offline.
+   When connected, it is merged with plays.json in a private GitHub repo, one play or player at a time: newest edit wins.
+   Games, the Board and API keys never go up. */
 window.Sync = (() => {
   const FILE = 'plays.json', API = 'https://api.github.com/repos/';
   let busy = false, again = false, timer = null, msg = '', state = 'off';
@@ -15,6 +15,49 @@ window.Sync = (() => {
     return o;
   }
   const sig = p => { const o = form(p); delete o.updatedAt; delete o.created; return hash(JSON.stringify(o)); };
+
+  const pform = p => ({ id: p.id, name: p.name, num: p.num || '', pos: { pg: !!p.pos.pg, w: !!p.pos.w, p: !!p.pos.p }, starter: !!p.starter, out: !!p.out, updatedAt: p.updatedAt || 0 });
+  const psig = p => { const o = pform(p); delete o.updatedAt; return hash(JSON.stringify(o)); };
+  const norm = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  /* The same kid entered on two devices becomes one player. A kid this device has never synced takes the cloud's copy. */
+  function adoptSameNames(doc) {
+    const c = cfg(), remote = Object.values((doc && doc.players) || {});
+    S.players = S.players.filter(lp => {
+      if (c.pbase[lp.id] || (doc.players && doc.players[lp.id])) return true;
+      const rp = remote.find(q => norm(q.name) === norm(lp.name)); if (!rp) return true;
+      S.plays.forEach(pl => (pl.tokens || []).forEach(t => { if (t.pid === lp.id) t.pid = rp.id; }));
+      (S.board.tokens || []).forEach(t => { if (t.pid === lp.id) t.pid = rp.id; });
+      const g = S.game;
+      if (g) {
+        Object.keys(g.lineup || {}).forEach(k => { if (g.lineup[k] === lp.id) g.lineup[k] = rp.id; });
+        if (g.credits[lp.id] != null) { g.credits[rp.id] = g.credits[lp.id]; delete g.credits[lp.id]; }
+        g.rots.forEach(r => { Object.keys(r.lineup).forEach(k => { if (r.lineup[k] === lp.id) r.lineup[k] = rp.id; }); if (r.parts[lp.id] != null) { r.parts[rp.id] = r.parts[lp.id]; delete r.parts[lp.id]; } });
+      }
+      return false;
+    });
+  }
+  function stampPlayers() {
+    const c = cfg(), now = Date.now(), ids = new Set();
+    S.players.forEach(p => { ids.add(p.id); const h = psig(p); if (c.pbase[p.id] !== h) { c.pbase[p.id] = h; p.updatedAt = now; } });
+    Object.keys(c.pbase).forEach(id => { if (!ids.has(id)) { delete c.pbase[id]; c.pdeleted[id] = now; } });
+  }
+  function mergePlayers(doc) {
+    const c = cfg(), remote = (doc && doc.players) || {}, deleted = { ...((doc && doc.playersDeleted) || {}) };
+    Object.entries(c.pdeleted).forEach(([k, v]) => { if (!(deleted[k] >= v)) deleted[k] = v; });
+    let changed = false;
+    Object.values(remote).forEach(rp => {
+      const lp = S.players.find(p => p.id === rp.id);
+      if (lp) { if ((rp.updatedAt || 0) > (lp.updatedAt || 0)) { delete lp.outDate; Object.assign(lp, clone(rp)); c.pbase[lp.id] = psig(lp); changed = true; } }
+      else if (!(deleted[rp.id] >= (rp.updatedAt || 0))) { S.players.push(clone(rp)); c.pbase[rp.id] = psig(rp); changed = true; }
+    });
+    S.players = S.players.filter(p => {
+      if (deleted[p.id] >= (p.updatedAt || 0)) { delete c.pbase[p.id]; changed = true; return false; }
+      delete deleted[p.id]; return true;
+    });
+    c.pdeleted = deleted;
+    return changed;
+  }
 
   /* Notice local edits and deletions, however they were made */
   function stamp() {
@@ -71,8 +114,10 @@ window.Sync = (() => {
     });
     S.plays.forEach(migratePlay);
     c.deleted = deleted;
-    const out = { v: 1, plays: {}, deleted };
+    if (mergePlayers(doc)) changedHere = true;
+    const out = { v: 1, plays: {}, deleted, players: {}, playersDeleted: c.pdeleted };
     S.plays.forEach(p => { out.plays[p.id] = form(p); });
+    S.players.forEach(p => { out.players[p.id] = pform(p); });
     return { out, changedHere };
   }
 
@@ -84,6 +129,8 @@ window.Sync = (() => {
       if (!S.plays.includes(ui.play)) { toast('That play was deleted on another device.'); go('plays'); }
       else if (ui.view === 'view') { ui.k = Math.min(ui.k, ui.play.steps.length); render(); }
     } else if (ui.view === 'setup') render();
+    else if (ui.view === 'roster' && !['INPUT', 'TEXTAREA'].includes((document.activeElement || {}).tagName)) render();
+    else if (ui.view === 'game' && !document.querySelector('.ghost')) render();
   }
   function show() { const e = document.getElementById('syncstat'); if (e) e.textContent = status(); }
 
@@ -95,7 +142,9 @@ window.Sync = (() => {
       for (let tries = 0; tries < 4; tries++) {
         const { doc, sha } = await pull();
         if (!c.joined) { if (doc) S.plays = S.plays.filter(p => !p.sample); c.joined = true; }
-        stamp();
+        c.pbase = c.pbase || {}; c.pdeleted = c.pdeleted || {};
+        if (doc) adoptSameNames(doc);
+        stamp(); stampPlayers();
         const { out, changedHere } = merge(doc);
         const same = doc && JSON.stringify(sortDoc(doc)) === JSON.stringify(sortDoc(out));
         save0();
@@ -116,27 +165,30 @@ window.Sync = (() => {
   }
   function sortDoc(d) {
     const k = o => Object.keys(o || {}).sort().reduce((a, x) => (a[x] = o[x], a), {});
-    return { plays: k(d.plays), deleted: k(d.deleted) };
+    return { plays: k(d.plays), deleted: k(d.deleted), players: k(d.players), playersDeleted: k(d.playersDeleted) };
   }
   const save0 = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* surfaced by save() on the next edit */ } };
 
   /* Called after any save: push soon, only if plays actually changed */
   function touched() {
     const c = cfg(); if (!c || !c.joined) return;
-    if (!S.plays.some(p => c.base[p.id] !== sig(p)) && !Object.keys(c.base).some(id => !S.plays.some(p => p.id === id))) return;
+    const pb = c.pbase || {};
+    const dirty = S.plays.some(p => c.base[p.id] !== sig(p)) || Object.keys(c.base).some(id => !S.plays.some(p => p.id === id))
+      || S.players.some(p => pb[p.id] !== psig(p)) || Object.keys(pb).some(id => !S.players.some(p => p.id === id));
+    if (!dirty) return;
     clearTimeout(timer); timer = setTimeout(run, 3000); state = 'pending'; show();
   }
   function status() {
     const c = cfg(); if (!c) return '';
-    if (state === 'busy') return 'Syncing plays';
+    if (state === 'busy') return 'Syncing';
     if (state === 'pending') return 'Saved here, syncing soon';
-    if (state === 'offline') return 'Offline. Plays are saved here and will sync later.';
+    if (state === 'offline') return 'Offline. Changes are saved here and will sync later.';
     if (state === 'error') return msg;
-    if (c.last) return 'Plays synced ' + new Date(c.last).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (c.last) return 'Synced ' + new Date(c.last).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     return '';
   }
   async function connect(repo, token) {
-    S.sync = { repo, token, base: {}, deleted: {}, joined: false, last: 0 };
+    S.sync = { repo, token, base: {}, deleted: {}, pbase: {}, pdeleted: {}, joined: false, last: 0 };
     const r = await req('');
     if (!r.ok) { const e = httpErr(r); S.sync = null; save0(); throw e; }
     state = 'off'; save0(); await run();

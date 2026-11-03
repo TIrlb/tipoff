@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.2.2';
+const APP_VERSION = '1.3.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -117,7 +117,7 @@ function render() {
 
 /* ---------- roster ---------- */
 function renderRoster() {
-  const P = S.players, st = P.filter(p => p.starter).length, inn = here().length;
+  const P = S.players.slice().sort((x, y) => x.name.localeCompare(y.name)), st = P.filter(p => p.starter).length, inn = here().length;
   const has = k => here().filter(p => p.pos[k]).length;
   $('#main').innerHTML = `<div class="pad">
     <div class="row"><h2 class="grow">Roster</h2><button class="btn pri" data-a="add">Add player</button></div>
@@ -133,7 +133,7 @@ function renderRoster() {
       </div>
       <button class="chip star ${p.starter ? 'on' : ''}" data-a="starter" aria-pressed="${!!p.starter}">Starter</button>
       <button class="chip out ${isOut(p) ? 'on' : ''}" data-a="out" aria-pressed="${isOut(p)}">${isOut(p) ? 'Out' : 'In'}</button>
-      <button class="x" data-a="del" aria-label="Remove ${esc(p.name)}">×</button></div>`).join('') || '<p class="mute">Add your players to get started. Names stay on this iPad.</p>'}</div></div>`;
+      <button class="x" data-a="del" aria-label="Remove ${esc(p.name)}">×</button></div>`).join('') || '<p class="mute">Add your players to get started.</p>'}</div></div>`;
   $('#main').onclick = e => {
     const row = e.target.closest('.rrow'), p = row && player(row.dataset.id), b = e.target.closest('button');
     if (!b) return;
@@ -886,15 +886,15 @@ function renderSetup() {
       <label>Claude API key<input type="text" class="secret" id="key" value="${esc(st.apiKey)}" placeholder="sk-ant-..." autocomplete="off"></label>
       <label>Model<input type="text" id="mdl" value="${esc(st.model)}"></label>
       <p class="small mute">The key stays on this device and is left out of backups. Images go straight from here to Anthropic.</p></div>
-    <div class="card"><h3>Sync plays across devices</h3>${window.Sync && Sync.cfg() ? `
+    <div class="card"><h3>Sync plays and roster</h3>${window.Sync && Sync.cfg() ? `
       <p class="small">Connected to ${esc(S.sync.repo)}. <span id="syncstat">${esc(Sync.status())}</span></p>
       <div class="row"><button class="btn" id="synow">Sync now</button><button class="btn" id="sycode">Copy setup code</button><button class="btn danger" id="sydis">Disconnect</button></div>
-      <p class="small mute">Paste the setup code into the token box on your other devices. It holds your sync token and Claude key, so treat it like a password. The roster never syncs.</p>` : `
+      <p class="small mute">Paste the setup code into the token box on your other devices. It holds your sync token and Claude key, so treat it like a password.</p>` : `
       <label>Private GitHub repo<input type="text" id="syrepo" value="TIrlb/tipoff-data" autocomplete="off" autocapitalize="off"></label>
       <label>GitHub token or setup code<input type="text" class="secret" id="sytok" autocomplete="off"></label>
       <button class="btn pri" id="sygo">Connect</button>
-      <p class="small mute">Plays are saved here first and sync when online. The roster, games and Board stay on this device.</p>`}</div>
-    <div class="card"><h3>Backup</h3><p class="small mute">Includes the roster and current game, which exist only on this device.</p>
+      <p class="small mute">Plays and the roster are saved here first and sync when online. Games and the Board stay on this device.</p>`}</div>
+    <div class="card"><h3>Backup</h3><p class="small mute">Includes the current game, which exists only on this device.</p>
       <div class="row"><button class="btn" id="exp">Save backup</button><button class="btn" id="imb">Restore backup</button></div></div>
     <p class="mute small">Version ${APP_VERSION}</p></div>`;
   $('#tn').onchange = e => { S.team = e.target.value.trim() || 'Team'; save(); render(); };
