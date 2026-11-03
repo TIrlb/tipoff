@@ -193,3 +193,5 @@ label{font-size:17px}
 
 .key{display:grid;grid-template-columns:1fr 1fr;gap:1px 10px;font-size:16px}
 .key span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.tpass{background:var(--gold);color:var(--navy);font-size:14px;font-weight:800;padding:0 6px;border-radius:6px}

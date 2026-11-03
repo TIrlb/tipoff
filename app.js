@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -240,13 +240,14 @@ function renderGame() {
   $('#main').innerHTML = `<div class="game">
     <div class="gcol">
       <div class="floor" id="floor"><svg viewBox="0 0 50 47" preserveAspectRatio="xMidYMin slice">${Court.floor('half').replace(/<rect x="-6"[^>]*>/, '')}</svg>
-      ${SLOTS.map(([s, role]) => { const p = player(g.lineup[s]); if (!p) return ''; const xy = SPOT_XY[s]; return `<div class="ptok court" data-pid="${p.id}" data-slot="${s}" style="left:${xy[0]}%;top:${xy[1]}%"><div class="tslot">${SLOT_LABEL[s]}</div><div class="tok ${p.pos[role] ? '' : 'off'}">${esc(initials(p))}<span class="n">${cr(g.credits[p.id] || 0)}</span></div><div class="tname">${esc(p.name.split(' ')[0])}</div></div>`; }).join('')}
+      ${SLOTS.map(([s, role]) => { const p = player(g.lineup[s]); if (!p) return ''; const xy = SPOT_XY[s]; return `<div class="ptok court" data-pid="${p.id}" data-slot="${s}" style="left:${xy[0]}%;top:${xy[1]}%"><div class="tslot">${SLOT_LABEL[s]}</div><div class="tok ${p.pos[role] ? '' : 'off'}">${esc(initials(p))}<span class="n">${cr(g.credits[p.id] || 0)}</span></div><div class="tname">${esc(p.name.split(' ')[0])}</div>${p.id === S.passer ? '<div class="tpass">Passer</div>' : ''}</div>`; }).join('')}
       </div>
     </div>
     <div class="gcol">
       <div class="row" style="align-items:stretch"><button class="subbtn" id="sub">Sub<small>Rotation ${g.rots.length + 1} next</small></button>
         <div style="display:flex;flex-direction:column;gap:6px"><button class="btn" id="undo" ${ui.undo.length ? '' : 'disabled'}>Undo</button><button class="btn" id="newg">New game</button></div></div>
       <div class="next"><span>Up next</span>${nxIds.map(id => { const p = player(id); return `<span class="mini" title="${esc(p.name)}">${esc(initials(p))}</span>`; }).join('')}${nx && nx.off ? `<span class="warn small">${nx.off} out of position</span>` : ''}</div>
+      <div class="small" id="passline">${passerOn(g.lineup) ? `Passer: <b>${esc(player(S.passer).name)}</b>` : 'No passer on the floor. Tap a player on the court to set one.'}</div>
       <h3>Bench</h3>
       <div class="bench" id="bench">${bench.map(p => ptok(p, '')).join('') || '<span class="mute">Nobody on the bench.</span>'}</div>
       <div class="log">${logTable()}</div>
@@ -307,7 +308,9 @@ function playerSheet(p) {
   const g = S.game, n = g.credits[p.id] || 0;
   sheet(`<h3>${esc(p.name)}</h3><p class="mute">${posText(p)}. ${cr(n)} rotation${n === 1 ? '' : 's'} played.</p>
     <div class="row"><button class="btn" id="m">Take off half</button><button class="btn" id="pl">Add half</button></div>
+    ${onCourt().includes(p.id) ? `<button class="btn" id="pa">${p.id === S.passer ? 'Remove as passer' : 'Make passer'}</button>` : ''}
     <button class="btn danger" id="o">Mark out</button><button class="btn" id="c">Close</button>`);
+  const pb = $('#pa'); if (pb) pb.onclick = () => { S.passer = p.id === S.passer ? null : p.id; save(); closeSheet(); render(); };
   $('#m').onclick = () => { snapshot(); g.credits[p.id] = Math.max(0, n - .5); save(); closeSheet(); render(); };
   $('#pl').onclick = () => { snapshot(); g.credits[p.id] = n + .5; save(); closeSheet(); render(); };
   $('#o').onclick = () => { setOut(p, true); save(); closeSheet(); render(); };
@@ -318,7 +321,7 @@ function playerSheet(p) {
 function thumb(p) {
   let h = Court.floor(p.court), r = Court.R(p.court);
   p.steps.forEach((_, i) => Court.actionPaths(p, i).forEach(({ a, pts }) => { h += Court.arrow(a.type, pts, r); }));
-  p.tokens.forEach(t => { h += Court.token(t, [t.x, t.y], r, { label: tokLabel(t) }); });
+  p.tokens.forEach(t => { h += Court.token(t, [t.x, t.y], r, { label: tokLabel(t, p) }); });
   return `<svg viewBox="${Court.viewBox(p.court)}" aria-hidden="true">${h}</svg>`;
 }
 function renderPlays() {
@@ -360,10 +363,25 @@ function currentFive() {
   const r = pick({ players: here(), mode: S.settings.fair, must: st.slice(0, 5) });
   return r ? r.lineup : null;
 }
-function tokLabel(t) {
+const passerOn = five => five && S.passer && Object.values(five).includes(S.passer) ? S.passer : null;
+/* In SLOB and BLOB plays the player starting with the ball inbounds, so the passer takes that spot and trades places with whoever had it */
+function playFive(p) {
+  const five = ui.five; if (!five || !p || !(p.cat === 'slob' || p.cat === 'blob')) return five;
+  const pa = passerOn(five), inb = p.tokens.find(t => t.id === p.ball), inbSlot = inb && !inb.pid && inb.side === 'o' && TOKEN_SLOT[inb.label];
+  if (!pa || !inbSlot || five[inbSlot] === pa) return five;
+  const from = Object.keys(five).find(k => five[k] === pa), out = { ...five };
+  out[from] = five[inbSlot]; out[inbSlot] = pa;
+  return out;
+}
+function tokLabel(t, p = ui.play) {
   if (t.pid) return player(t.pid) ? initials(player(t.pid)) : t.label;
-  if (ui.five && !(S.settings.numbers && !ui.editBoard) && t.side === 'o' && TOKEN_SLOT[t.label]) { const k = player(ui.five[TOKEN_SLOT[t.label]]); if (k) return initials(k); }
+  if (ui.five && !(S.settings.numbers && !ui.editBoard) && t.side === 'o' && TOKEN_SLOT[t.label]) { const k = player(playFive(p)[TOKEN_SLOT[t.label]]); if (k) return initials(k); }
   return t.label;
+}
+function passerSheet(after) {
+  const five = ui.five; if (!five) return toast('Set your starters or start a game first.');
+  sheet(`<h3>Who inbounds?</h3>${Object.values(five).map(id => `<button class="btn ${id === S.passer ? 'gold' : ''}" data-pa="${id}">${esc(player(id).name)}</button>`).join('')}<button class="btn" data-pa="">No passer</button>`);
+  document.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => { S.passer = b.dataset.pa || null; save(); closeSheet(); after(); });
 }
 const liveLabel = tokLabel;
 function renderView() {
@@ -377,7 +395,8 @@ function renderView() {
       <button class="nextbtn" id="next">Next</button>
       <div class="row"><button class="btn grow" id="prev">Back</button><button class="btn grow" id="re">Restart</button></div>
       <div class="dots" id="dots"></div>
-      ${ui.five ? `<div class="key">${[1, 2, 3, 4, 5].map(n => { const k = player(ui.five[TOKEN_SLOT[n]]); return `<span><b>${n}</b> ${SLOT_LABEL[TOKEN_SLOT[n]]}: ${esc(k ? k.name : '?')}</span>`; }).join('')}</div>
+      ${ui.five ? `<div class="key">${[1, 2, 3, 4, 5].map(n => { const k = player(playFive(p)[TOKEN_SLOT[n]]); return `<span><b>${n}</b> ${SLOT_LABEL[TOKEN_SLOT[n]]}: ${esc(k ? k.name : '?')}</span>`; }).join('')}</div>
+      ${p.cat === 'slob' || p.cat === 'blob' ? `<div class="row small"><span class="grow">Passer: <b>${passerOn(ui.five) ? esc(player(S.passer).name) : 'none on the floor'}</b></span><button class="chip" id="pas">Change</button></div>` : ''}
       <button class="chip" id="ul">${S.settings.numbers ? 'Show player initials' : 'Show numbers'}</button>` : ''}
       ${legend()}
       <div class="row" style="margin-top:auto"><button class="btn grow" id="flip">Flip</button><button class="btn grow" id="ed">Edit play</button><button class="btn danger" id="dl">Delete</button></div>
@@ -390,6 +409,7 @@ function renderView() {
   $('#flip').onclick = () => { cancelAnim(); flipPlay(p); save(); drawView(); };
   $('#ed').onclick = () => openEdit(p);
   $('#dl').onclick = () => { sheet(`<h3>Delete ${esc(p.name)}?</h3><div class="row"><button class="btn danger" id="y">Delete</button><button class="btn" id="n">Keep</button></div>`); $('#y').onclick = () => { S.plays = S.plays.filter(x => x !== p); save(); closeSheet(); go('plays'); }; $('#n').onclick = closeSheet; };
+  const pas = $('#pas'); if (pas) pas.onclick = () => passerSheet(renderView);
   const ul = $('#ul'); if (ul) ul.onclick = () => { S.settings.numbers = !S.settings.numbers; save(); renderView(); };
 }
 function cancelAnim() { if (ui.anim) { cancelAnimationFrame(ui.anim); ui.anim = null; } }
