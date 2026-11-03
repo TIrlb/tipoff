@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.1.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -68,6 +68,7 @@ if (!S) S = blank();
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { toast('Storage is full. Remove imported photos from plays, then try again.'); }
+  if (window.Sync) Sync.touched();
 }
 const ui = { view: 'game', cat: 'all', play: null, k: 0, undo: [] };
 function toast(m, ms = 2600) { const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, ms); }
@@ -287,13 +288,14 @@ function playerSheet(p) {
 function thumb(p) {
   let h = Court.floor(p.court), r = Court.R(p.court);
   p.steps.forEach((_, i) => Court.actionPaths(p, i).forEach(({ a, pts }) => { h += Court.arrow(a.type, pts, r); }));
-  p.tokens.forEach(t => { h += Court.token(t, [t.x, t.y], r); });
+  p.tokens.forEach(t => { h += Court.token(t, [t.x, t.y], r, { label: tokLabel(t) }); });
   return `<svg viewBox="${Court.viewBox(p.court)}" aria-hidden="true">${h}</svg>`;
 }
 function renderPlays() {
-  const list = S.plays.filter(p => ui.cat === 'all' || p.cat === ui.cat);
+  const list = S.plays.filter(p => ui.cat === 'all' || p.cat === ui.cat).sort((x, y) => (y.created || 0) - (x.created || 0) || x.name.localeCompare(y.name));
   $('#main').innerHTML = `<div class="pad">
     <div class="row"><h2 class="grow">Plays</h2><button class="btn" id="imp">Import from image</button><button class="btn pri" id="np">New play</button></div>
+    <div class="small mute" id="syncstat">${window.Sync ? esc(Sync.status()) : ''}</div>
     <div class="chips" style="margin-top:10px">${Object.entries({ all: 'All', ...CATS }).map(([k, v]) => `<button class="chip ${ui.cat === k ? 'on' : ''}" data-c="${k}">${v}</button>`).join('')}</div>
     <div class="pgrid">${list.map(p => `<button class="pcard" data-p="${p.id}">${thumb(p)}<b>${esc(p.name)}</b><span>${CATS[p.cat]}, ${p.steps.length} step${p.steps.length === 1 ? '' : 's'}</span></button>`).join('') || '<p class="mute">No plays of this type yet. Tap New play.</p>'}</div></div>`;
   $('#main').onclick = e => {
@@ -319,8 +321,10 @@ function glyph(type) { return `<svg viewBox="0 0 12 4" aria-hidden="true">${Cour
 const legend = () => `<div class="legend">${[['cut', 'Cut'], ['pass', 'Pass'], ['dribble', 'Dribble'], ['screen', 'Screen']].map(([t, l]) => `<div>${glyph(t)}${l}</div>`).join('')}</div>`;
 
 /* lineup names on the tokens: 1 PG, 2-3 wings, 4-5 posts */
+/* A kid's token shows initials on devices that have that kid in the roster */
+const tokLabel = t => t.pid && player(t.pid) ? initials(player(t.pid)) : t.label;
 function liveLabel(t) {
-  if (t.pid) return initials(player(t.pid));
+  if (t.pid) return tokLabel(t);
   if (ui.useLineup && S.game && t.side === 'o' && TOKEN_SLOT[t.label]) return initials(player(S.game.lineup[TOKEN_SLOT[t.label]]));
   return t.label;
 }
@@ -364,31 +368,46 @@ function drawView(tokOverride, ballOverride, hideArrows) {
   $('#dots').innerHTML = p.steps.map((_, i) => `<button class="dot ${i === k ? 'on' : ''}" data-d="${i}" aria-label="Step ${i + 1}">${i + 1}</button>`).join('');
   $('#dots').onclick = e => { const d = e.target.closest('[data-d]'); if (d) { cancelAnim(); ui.k = +d.dataset.d; drawView(); } };
 }
+/* Order inside a step: screens get set first, then cuts and dribbles, and a pass leads the receiver.
+   A step can opt out with "together" so the screen and cut run at the same time. */
+function stepTiming(step, x) {
+  const scale = matchMedia('(prefers-reduced-motion:reduce)').matches ? .001 : 1, D_S = 900 * scale, D_M = 1300 * scale, D_P = 750 * scale;
+  const screens = x.filter(q => q.a.type === 'screen'), moves = x.filter(q => q.a.type === 'cut' || q.a.type === 'dribble');
+  const seq = screens.length && !step.together;
+  const screenDur = seq || !moves.length ? D_S : D_M, moveStart = seq ? D_S : 0;
+  const movesEnd = moves.length ? moveStart + D_M : (screens.length ? screenDur : 0);
+  const hasPass = x.some(q => q.a.type === 'pass');
+  const passStart = moves.length ? moveStart + .45 * D_M : movesEnd, passEnd = moves.length ? movesEnd : movesEnd + D_P;
+  return { screenDur, moveStart, moveDur: D_M, passStart, passEnd, total: hasPass ? passEnd : movesEnd };
+}
 function animate(p, k, done) {
-  const paths = Court.actionPaths(p, k), st = Court.stateAt(p, k), start = performance.now();
-  const reduce = matchMedia('(prefers-reduced-motion:reduce)').matches;
-  const hasMoves = paths.some(x => x.a.type !== 'pass'), passes = paths.filter(x => x.a.type === 'pass');
-  const dur = reduce ? 1 : (hasMoves ? 1300 : 750), samples = paths.map(x => ({ ...x, s: Court.sample(x.pts) }));
-  const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+  const paths = Court.actionPaths(p, k), st = Court.stateAt(p, k), start = performance.now(), step = p.steps[k];
+  const T = stepTiming(step, paths), items = paths.map(x => ({ ...x, s: Court.sample(x.pts) })), pass = items.find(x => x.a.type === 'pass');
+  const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2, clamp = t => Math.min(1, Math.max(0, t));
+  const r = Court.R(p.court);
   const frame = now => {
-    const t = Math.min(1, (now - start) / dur), e = ease(t), pos = { ...st.pos };
-    samples.forEach(x => { if (x.a.type !== 'pass') pos[x.a.tok] = Court.at(x.s, e); });
-    let ballXY = null;
-    if (passes.length) {
-      // a pass leads the receiver: it leaves late enough to land as the cut finishes
-      const from = pos[passes[0].a.tok], to = pos[passes[0].a.to], pt = hasMoves ? Math.max(0, (t - .45) / .55) : e;
-      ballXY = pt <= 0 ? null : [from[0] + (to[0] - from[0]) * pt, from[1] + (to[1] - from[1]) * pt];
-      drawViewBall(pos, ballXY, pt <= 0 ? st.ball : null);
-    } else drawViewBall(pos, null, st.ball);
-    if (t < 1) ui.anim = requestAnimationFrame(frame);
+    const ms = now - start, pos = { ...st.pos };
+    items.forEach(x => {
+      if (x.a.type === 'screen') pos[x.a.tok] = Court.at(x.s, ease(clamp(ms / T.screenDur)));
+      else if (x.a.type !== 'pass') pos[x.a.tok] = Court.at(x.s, ease(clamp((ms - T.moveStart) / T.moveDur)));
+    });
+    // while the screen is being set, show what comes next
+    const waiting = ms < T.moveStart ? items.filter(x => x.a.type !== 'screen').map(x => Court.arrow(x.a.type, x.pts, r)).join('') : '';
+    if (pass) {
+      const from = pos[pass.a.tok], to = pos[pass.a.to], pt = clamp((ms - T.passStart) / (T.passEnd - T.passStart));
+      const xy = pt <= 0 ? null : [from[0] + (to[0] - from[0]) * pt, from[1] + (to[1] - from[1]) * pt];
+      drawViewBall(pos, xy, pt <= 0 ? st.ball : null, waiting);
+    } else drawViewBall(pos, null, st.ball, waiting);
+    if (ms < T.total) ui.anim = requestAnimationFrame(frame);
     else { ui.anim = null; done(); }
   };
   ui.anim = requestAnimationFrame(frame);
 }
-function drawViewBall(pos, xy, holder) {
+function drawViewBall(pos, xy, holder, extra = '') {
   const p = ui.play, r = Court.R(p.court);
   let h = Court.floor(p.court);
   (p.pen || []).forEach(s => { h += `<path d="${Court.smooth(s)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4" stroke-linecap="round"/>`; });
+  h += extra;
   p.tokens.forEach(t => { h += Court.token(t, pos[t.id], r, { label: liveLabel(t) }); });
   if (holder && pos[holder]) h += Court.ballMark(pos[holder], r);
   if (xy) h += `<g class="ball" transform="translate(${f(xy[0])} ${f(xy[1])})"><circle r="${f(r * .5)}"/></g>`;
@@ -410,6 +429,7 @@ function renderEdit() {
       ${board ? `<div class="row"><button class="chip ${p.court === 'half' ? 'on' : ''}" id="ch">Half</button><button class="chip ${p.court === 'full' ? 'on' : ''}" id="cf">Full</button><button class="btn" id="clr">Clear</button>${S.game ? '<button class="btn" id="ln">Place lineup</button>' : ''}</div>` : ''}
       <div class="dots"><button class="dot ${ui.step === 0 ? 'on' : ''}" data-s="0" aria-label="Starting positions and step 1">${p.steps.length ? 1 : 'Start'}</button>${p.steps.slice(1).map((_, i) => `<button class="dot ${ui.step === i + 1 ? 'on' : ''}" data-s="${i + 1}">${i + 2}</button>`).join('')}<button class="dot add" id="adds" aria-label="Add step">+ Step</button>${p.steps.length > 1 ? '<button class="dot" id="dels" aria-label="Delete this step">Delete</button>' : ''}</div>
       <input type="text" id="note" placeholder="What happens in this step" value="${esc((p.steps[ui.step] || {}).note || '')}" aria-label="Step description">
+      ${(() => { const st = p.steps[ui.step]; if (!st || !st.actions.some(x => x.type === 'screen') || !st.actions.some(x => x.type === 'cut' || x.type === 'dribble')) return ''; return `<button class="chip ${st.together ? '' : 'on'}" id="tog" aria-pressed="${!st.together}">${st.together ? 'Screen and cut run together' : 'Screen first, then cut'}</button>`; })()}
       <div class="tools">${TOOLS.map(([k, l]) => `<button class="tool ${ui.tool === k ? 'on' : ''}" data-t="${k}" aria-pressed="${ui.tool === k}">${Court.COLOR[k] && k !== 'pen' ? glyph(k) : ''}${l}</button>`).join('')}</div>
       <div class="hint" id="hint"></div>
       <div class="tray">${[1, 2, 3, 4, 5].map(i => `<button data-add="${i}" class="${usedLabel(String(i)) ? 'used' : ''}">${i}</button>`).join('')}${[1, 2, 3, 4, 5].map(i => `<button class="d ${usedLabel('X' + i) ? 'used' : ''}" data-add="X${i}">X${i}</button>`).join('')}</div>
@@ -423,6 +443,7 @@ function renderEdit() {
   const q = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { ui.step = +b.dataset.s; renderEdit(); });
   document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { ui.tool = b.dataset.t; renderEdit(); });
+  q('#tog', () => { editPush(); const st = p.steps[ui.step]; if (st.together) delete st.together; else st.together = true; persist(); renderEdit(); });
   q('#adds', () => { editPush(); if (!p.steps.length) p.steps.push({ note: '', actions: [] }); p.steps.push({ note: '', actions: [] }); ui.step = p.steps.length - 1; persist(); renderEdit(); });
   q('#dels', () => { editPush(); p.steps.splice(ui.step, 1); ui.step = Math.max(0, ui.step - 1); persist(); renderEdit(); });
   $('#note').onchange = e => { if (!p.steps.length) p.steps.push({ note: '', actions: [] }); p.steps[ui.step].note = e.target.value; persist(); };
@@ -474,7 +495,7 @@ function drawEdit(live) {
   (p.pen || []).forEach((s, i) => { h += `<g data-pen="${i}"><path d="${Court.smooth(s)}" fill="none" stroke="transparent" stroke-width="3"/><path d="${Court.smooth(s)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4" stroke-linecap="round"/></g>`; });
   Court.actionPaths(p, k).forEach(({ a, pts }) => { h += Court.arrow(a.type, pts, r, { id: a.id }); });
   if (live) h += live.type === 'pen' ? `<path d="${Court.smooth(live.pts)}" fill="none" stroke="${Court.COLOR.pen}" stroke-width=".4"/>` : Court.arrow(live.type, live.pts, r);
-  p.tokens.forEach(t => { h += Court.token(t, (live && live.drag === t.id) ? live.at : st.pos[t.id], r, { label: t.pid ? initials(player(t.pid)) : t.label }); });
+  p.tokens.forEach(t => { h += Court.token(t, (live && live.drag === t.id) ? live.at : st.pos[t.id], r, { label: tokLabel(t) }); });
   if (st.ball && st.pos[st.ball]) h += Court.ballMark((live && live.drag === st.ball) ? live.at : st.pos[st.ball], r);
   $('#cv').innerHTML = h;
 }
@@ -543,7 +564,7 @@ Schema:
  "tokens":[{"label":"1","side":"o"|"d","x":number,"y":number,"hasBall":boolean}],
  "steps":[{"note":"short plain sentence","actions":[{"type":"cut"|"pass"|"dribble"|"screen","token":"1","to":"2 (pass only)","path":[[x,y],...] }]}],
  "uncertain":["anything you could not read"]}
-Rules: tokens hold starting spots only. Path runs from the token's position at that step to where it ends, with 2 to 5 points following the drawn curve. Omit path on passes. Each step holds actions that happen together. Order steps using numbers on the arrows if present; otherwise use basketball logic: screens before the cut off them, the pass before the receiver acts on it, one pass per step. If several images are supplied they are successive frames of one play.`;
+Rules: tokens hold starting spots only. Path runs from the token's position at that step to where it ends, with 2 to 5 points following the drawn curve. Omit path on passes. Each step holds actions that happen together, except that the app always runs a step's screens before its cuts and dribbles, so a screen and the cut off it may share a step. Order steps using numbers on the arrows if present; otherwise use basketball logic: screens before the cut off them, the pass before the receiver acts on it, one pass per step. If several images are supplied they are successive frames of one play.`;
 
 function importSheet() {
   const hasKey = !!S.settings.apiKey;
@@ -651,21 +672,42 @@ function renderSetup() {
       <label>Claude API key<input type="password" id="key" value="${esc(st.apiKey)}" placeholder="sk-ant-..." autocomplete="off"></label>
       <label>Model<input type="text" id="mdl" value="${esc(st.model)}"></label>
       <p class="small mute">The key stays on this device and is left out of backups. Images go straight from here to Anthropic.</p></div>
-    <div class="card"><h3>Backup</h3><p class="small mute">Roster, plays and the current game live only on this device.</p>
+    <div class="card"><h3>Sync plays across devices</h3>${window.Sync && Sync.cfg() ? `
+      <p class="small">Connected to ${esc(S.sync.repo)}. <span id="syncstat">${esc(Sync.status())}</span></p>
+      <div class="row"><button class="btn" id="synow">Sync now</button><button class="btn" id="sycode">Copy setup code</button><button class="btn danger" id="sydis">Disconnect</button></div>
+      <p class="small mute">Paste the setup code into the token box on your other devices. It holds your sync token and Claude key, so treat it like a password. The roster never syncs.</p>` : `
+      <label>Private GitHub repo<input type="text" id="syrepo" value="TIrlb/tipoff-data" autocomplete="off" autocapitalize="off"></label>
+      <label>GitHub token or setup code<input type="password" id="sytok" autocomplete="off"></label>
+      <button class="btn pri" id="sygo">Connect</button>
+      <p class="small mute">Plays are saved here first and sync when online. The roster, games and Board stay on this device.</p>`}</div>
+    <div class="card"><h3>Backup</h3><p class="small mute">Includes the roster and current game, which exist only on this device.</p>
       <div class="row"><button class="btn" id="exp">Save backup</button><button class="btn" id="imb">Restore backup</button></div></div>
     <p class="mute small">Version ${APP_VERSION}</p></div>`;
   $('#tn').onchange = e => { S.team = e.target.value.trim() || 'Team'; save(); render(); };
   $('#key').onchange = e => { st.apiKey = e.target.value.trim(); save(); };
   $('#mdl').onchange = e => { st.model = e.target.value.trim() || 'claude-sonnet-5-5'; save(); };
   document.querySelectorAll('[data-fair]').forEach(b => b.onclick = () => { st.fair = b.dataset.fair; save(); render(); });
+  const clk = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  clk('#synow', () => { Sync.run().then(() => { toast(Sync.status() || 'Synced'); render(); }); });
+  clk('#sycode', async () => { try { await navigator.clipboard.writeText(Sync.code()); toast('Setup code copied'); } catch (e) { toast('Copy was blocked by the browser.'); } });
+  clk('#sydis', () => { Sync.disconnect(); toast('Disconnected. Plays stay on this device.'); render(); });
+  clk('#sygo', async () => {
+    let repo = $('#syrepo').value.trim(), tok = $('#sytok').value.trim();
+    try {
+      if (tok.startsWith('tipoff:')) { const c = Sync.parseCode(tok); repo = c.repo; tok = c.token; if (c.key && !st.apiKey) st.apiKey = c.key; }
+      if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !tok) return toast('Enter the repo as owner/name, plus a token.');
+      $('#sygo').disabled = true;
+      await Sync.connect(repo, tok); toast('Connected. Plays are syncing.'); render();
+    } catch (e) { toast(e instanceof TypeError ? 'Could not reach GitHub. Check the connection.' : e.message, 5000); const b = $('#sygo'); if (b) b.disabled = false; }
+  });
   $('#exp').onclick = () => {
-    const o = clone(S); o.settings.apiKey = '';
+    const o = clone(S); o.settings.apiKey = ''; delete o.sync;
     const url = URL.createObjectURL(new Blob([JSON.stringify(o)], { type: 'application/json' })), l = document.createElement('a');
     l.href = url; l.download = `tipoff-backup-${today()}.json`; l.click(); setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
   $('#imb').onclick = () => {
     const inp = $('#file'); inp.accept = '.json,application/json'; inp.multiple = false; inp.value = '';
-    inp.onchange = async () => { try { const o = JSON.parse(await inp.files[0].text()); if (!Array.isArray(o.players) || !Array.isArray(o.plays)) throw 0; o.settings.apiKey = st.apiKey; S = o; save(); toast('Backup restored'); render(); } catch (e) { toast('That file is not a Tipoff backup.'); } };
+    inp.onchange = async () => { try { const o = JSON.parse(await inp.files[0].text()); if (!Array.isArray(o.players) || !Array.isArray(o.plays)) throw 0; o.settings.apiKey = st.apiKey; if (S.sync) o.sync = S.sync; S = o; save(); toast('Backup restored'); render(); } catch (e) { toast('That file is not a Tipoff backup.'); } };
     inp.click();
   };
 }
