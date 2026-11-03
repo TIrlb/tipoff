@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -547,7 +547,7 @@ function flipPlay(p) {
 function animate(p, k, done) {
   const paths = Court.actionPaths(p, k), st = Court.stateAt(p, k), start = performance.now(), step = p.steps[k];
   const movers = new Set(paths.filter(x => x.a.type !== 'pass').map(x => x.a.tok));
-  const T = stepTiming(step, paths), items = paths.map(x => ({ ...x, s: Court.sample(x.pts) })), pass = items.find(x => x.a.type === 'pass');
+  const T = stepTiming(step, paths), items = paths.map(x => ({ ...x, s: x.a.type === 'pass' ? Court.sample(x.pts) : Court.runPath(p, x.a, x.pts) })), pass = items.find(x => x.a.type === 'pass');
   const R0 = .12, ease = t => t < R0 ? t * t / (2 * R0 * (1 - R0)) : t > 1 - R0 ? 1 - (1 - t) ** 2 / (2 * R0 * (1 - R0)) : (t - R0 / 2) / (1 - R0), clamp = t => Math.min(1, Math.max(0, t));
   const r = Court.R(p.court);
   const frame = now => {
@@ -818,7 +818,7 @@ function removeToken(p, id) {
 function handlesFor(p, k) {
   const f = ui.sel && findAction(ui.sel); if (!f || f.i !== k) return [];
   const st = Court.stateAt(p, k);
-  if (f.a.type === 'pass') { const ends = { ...st.pos }; p.steps[k].actions.forEach(x => { if (x.type !== 'pass' && x.pts.length) ends[x.tok] = x.pts[x.pts.length - 1]; }); return ends[f.a.to] ? [{ i: 'to', at: ends[f.a.to] }] : []; }
+  if (f.a.type === 'pass') { const ends = { ...st.pos }; p.steps[k].actions.forEach(x => { if (x.type !== 'pass' && x.pts.length && st.pos[x.tok]) ends[x.tok] = Court.moveEnd(p, x, st.pos[x.tok]); }); return ends[f.a.to] ? [{ i: 'to', at: ends[f.a.to] }] : []; }
   return f.a.pts.map((q, i) => ({ i, at: q })).filter(h => h.i > 0);
 }
 function drawEdit(live) {
@@ -849,7 +849,7 @@ function bindEdit() {
     if (hd) {
       const fa = findAction(ui.sel); editPush();
       if (hd.i === 'to') {
-        up = ev => { const ends = { ...st.pos }; p.steps[k].actions.forEach(x => { if (x.type !== 'pass' && x.pts.length) ends[x.tok] = x.pts[x.pts.length - 1]; }); const to = nearest(toW(ev), ends, r * 3); if (to && to !== fa.a.tok) fa.a.to = to; persist(); refreshEdit(); };
+        up = ev => { const ends = { ...st.pos }; p.steps[k].actions.forEach(x => { if (x.type !== 'pass' && x.pts.length && st.pos[x.tok]) ends[x.tok] = Court.moveEnd(p, x, st.pos[x.tok]); }); const to = nearest(toW(ev), ends, r * 3); if (to && to !== fa.a.tok) fa.a.to = to; persist(); refreshEdit(); };
         mv = ev => drawEdit({ type: 'pass', pts: [st.pos[fa.a.tok], toW(ev)] });
       } else {
         mv = ev => { const w = toW(ev); fa.a.pts[hd.i] = [f(w[0]), f(w[1])]; drawEdit(); };
@@ -893,7 +893,7 @@ function bindEdit() {
       if (!p.steps.length) p.steps.push({ note: '', actions: [] });
       const step = p.steps[ui.step];
       if (tool === 'pass') {
-        const end = toW(ev), pos2 = { ...st.pos }; step.actions.forEach(x => { if (x.type !== 'pass' && x.pts.length) pos2[x.tok] = x.pts[x.pts.length - 1]; });
+        const end = toW(ev), pos2 = { ...st.pos }; step.actions.forEach(x => { if (x.type !== 'pass' && x.pts.length) pos2[x.tok] = Court.moveEnd(p, x, st.pos[x.tok]); });
         const to = nearest(end, pos2, r * 3.2);
         if (!to || to === hit) { refreshEdit(); return toast('End the pass on a teammate.'); }
         editPush(); step.actions = step.actions.filter(x => x.type !== 'pass');

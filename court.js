@@ -109,9 +109,30 @@
     const a = s[Math.max(0, n - 4)], b = s[n - 1];
     return Math.hypot(b[0] - a[0], b[1] - a[1]) < .01 ? null : Math.atan2(b[1] - a[1], b[0] - a[0]);
   }
+  /* A screen arrow's end is where the T goes. The player stops short of it, so the T lands exactly where it was drawn. */
+  const SCREEN_GAP = .95;
+  const movePath = (a, from) => [from, ...a.pts.slice(a.pts.length > 1 ? 1 : 0)];
+  function moveEnd(play, a, from) {
+    const last = a.pts[a.pts.length - 1];
+    if (a.type !== 'screen') return last.slice();
+    const pts = movePath(a, from), ang = endAngle(pts); if (ang == null) return from.slice();
+    const d = R(play.court) + SCREEN_GAP;
+    if (lengthOf(pts) <= d) return from.slice();
+    return [last[0] - Math.cos(ang) * d, last[1] - Math.sin(ang) * d];
+  }
+  /* The route a player actually travels for this move */
+  function runPath(play, a, pts) {
+    const s = sample(pts);
+    if (a.type !== 'screen') return s;
+    const stop = moveEnd(play, a, pts[0]), d = R(play.court) + SCREEN_GAP;
+    if (lengthOf(pts) <= d) return [pts[0], pts[0]];
+    const out = trim(s, 0, d); out.push(stop);
+    return out;
+  }
+  const lengthOf = pts => length(sample(pts));
   /* The short purple T that stays with a screener, on the side they moved toward */
   function screenMark(p, ang, r) {
-    const cx = Math.cos(ang), sy = Math.sin(ang), w = r * .95, d = r + .95;
+    const cx = Math.cos(ang), sy = Math.sin(ang), w = r * .95, d = r + SCREEN_GAP;
     const bx = p[0] + cx * d, by = p[1] + sy * d;
     return `<g class="scrmark" stroke="${COLOR.screen}" stroke-linecap="round"><line x1="${f(p[0] + cx * r)}" y1="${f(p[1] + sy * r)}" x2="${f(bx)}" y2="${f(by)}" stroke-width=".55"/><line x1="${f(bx - sy * w)}" y1="${f(by + cx * w)}" x2="${f(bx + sy * w)}" y2="${f(by - cx * w)}" stroke-width=".65"/></g>`;
   }
@@ -125,8 +146,8 @@
         if (a.type === 'pass') continue;
         if (pos[a.tok] && a.pts && a.pts.length) {
           delete screens[a.tok];
-          if (a.type === 'screen') { const ang = endAngle([pos[a.tok], ...a.pts.slice(a.pts.length > 1 ? 1 : 0)]); if (ang != null) screens[a.tok] = ang; }
-          pos[a.tok] = a.pts[a.pts.length - 1].slice();
+          if (a.type === 'screen') { const ang = endAngle(movePath(a, pos[a.tok])); if (ang != null) screens[a.tok] = ang; }
+          pos[a.tok] = moveEnd(play, a, pos[a.tok]);
         }
       }
       for (const a of play.steps[i].actions) if (a.type === 'pass' && pos[a.to]) ball = a.to;
@@ -137,7 +158,7 @@
   function actionPaths(play, k) {
     const { pos } = stateAt(play, k), end = { ...pos };
     const st = play.steps[k]; if (!st) return [];
-    st.actions.forEach(a => { if (a.type !== 'pass' && a.pts && a.pts.length && pos[a.tok]) end[a.tok] = a.pts[a.pts.length - 1]; });
+    st.actions.forEach(a => { if (a.type !== 'pass' && a.pts && a.pts.length && pos[a.tok]) end[a.tok] = moveEnd(play, a, pos[a.tok]); });
     return st.actions.map(a => {
       if (!pos[a.tok]) return null;
       if (a.type === 'pass') return pos[a.to] ? { a, pts: [pos[a.tok], end[a.to]] } : null;
@@ -162,5 +183,5 @@
     return simplify(pts.slice(0, mi + 1), tol).slice(0, -1).concat(simplify(pts.slice(mi), tol));
   }
 
-  root.Court = { endAngle, screenMark, PAD, dims, viewBox, R, COLOR, floor, smooth, sample, at, arrow, stateAt, actionPaths, token, ballMark, esc, simplify, f };
+  root.Court = { moveEnd, runPath, endAngle, screenMark, PAD, dims, viewBox, R, COLOR, floor, smooth, sample, at, arrow, stateAt, actionPaths, token, ballMark, esc, simplify, f };
 })(this);
