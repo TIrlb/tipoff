@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.3.3';
+const APP_VERSION = '1.4.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -63,6 +63,8 @@ function samples() {
 function blank() {
   return { team: 'Grizzlies', players: [], plays: samples(), game: null, board: newBoard(), settings: { fair: 'even', apiKey: '', model: 'claude-sonnet-5-5' } };
 }
+/* Fresh board: the current five in the pick and roll starting spots. The tokens follow subs. */
+function defaultBoard(b) { Object.assign(b, { tokens: slotTokens(b.court === 'full' ? 'full' : 'half'), steps: [], pen: [], ball: 't1' }); }
 function newBoard() { return { id: 'board', name: 'Board', cat: 'half', court: 'half', tokens: [], ball: null, steps: [], pen: [], notes: '', seq: 2 }; }
 let S;
 try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* start fresh */ }
@@ -119,11 +121,12 @@ function restorePage() {
 }
 function render() {
   rememberPage();
+  ui.five = currentFive();
   const ver = $('#ver'); ver.textContent = 'v' + APP_VERSION; ver.hidden = ui.view !== 'game';
   $('#teamName').textContent = S.team;
   const navOn = ui.view === 'view' || ui.view === 'edit' ? (ui.editBoard ? 'board' : 'plays') : ui.view;
   document.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('on', b.dataset.nav === navOn));
-  ({ game: renderGame, roster: renderRoster, plays: renderPlays, view: renderView, edit: renderEdit, board: () => { ui.editBoard = true; ui.play = S.board; ui.step = ui.step || 0; ui.tool = ui.tool || 'move'; renderEdit(); }, setup: renderSetup })[ui.view]();
+  ({ game: renderGame, roster: renderRoster, plays: renderPlays, view: renderView, edit: renderEdit, board: () => { ui.editBoard = true; ui.play = S.board; if (!S.board.tokens.length && !S.board.steps.length && !(S.board.pen || []).length) { defaultBoard(S.board); save(); } ui.step = ui.step || 0; ui.tool = ui.tool || 'move'; renderEdit(); }, setup: renderSetup })[ui.view]();
   if (ui.view !== 'board' && ui.view !== 'edit') ui.editBoard = false;
 }
 
@@ -349,12 +352,20 @@ const legend = () => `<div class="legend">${[['cut', 'Cut'], ['pass', 'Pass'], [
 
 /* lineup names on the tokens: 1 PG, 2-3 wings, 4-5 posts */
 /* A kid's token shows initials on devices that have that kid in the roster */
-const tokLabel = t => t.pid && player(t.pid) ? initials(player(t.pid)) : t.label;
-function liveLabel(t) {
-  if (t.pid) return tokLabel(t);
-  if (ui.useLineup && S.game && t.side === 'o' && TOKEN_SLOT[t.label]) return initials(player(S.game.lineup[TOKEN_SLOT[t.label]]));
+/* Numbered tokens show who is in that spot: 1 PG, 2-3 wings, 4-5 posts, from the game in progress or the starters */
+function currentFive() {
+  if (S.game && S.game.lineup) return S.game.lineup;
+  const st = here().filter(p => p.starter);
+  if (!st.length || here().length < 5) return null;
+  const r = pick({ players: here(), mode: S.settings.fair, must: st.slice(0, 5) });
+  return r ? r.lineup : null;
+}
+function tokLabel(t) {
+  if (t.pid) return player(t.pid) ? initials(player(t.pid)) : t.label;
+  if (ui.five && !(S.settings.numbers && !ui.editBoard) && t.side === 'o' && TOKEN_SLOT[t.label]) { const k = player(ui.five[TOKEN_SLOT[t.label]]); if (k) return initials(k); }
   return t.label;
 }
+const liveLabel = tokLabel;
 function renderView() {
   const p = ui.play, n = p.steps.length;
   $('#main').innerHTML = `<div class="stage">
@@ -366,7 +377,8 @@ function renderView() {
       <button class="nextbtn" id="next">Next</button>
       <div class="row"><button class="btn grow" id="prev">Back</button><button class="btn grow" id="re">Restart</button></div>
       <div class="dots" id="dots"></div>
-      ${S.game ? `<button class="chip ${ui.useLineup ? 'on' : ''}" id="ul">Show current lineup</button>` : ''}
+      ${ui.five ? `<div class="key">${[1, 2, 3, 4, 5].map(n => { const k = player(ui.five[TOKEN_SLOT[n]]); return `<span><b>${n}</b> ${SLOT_LABEL[TOKEN_SLOT[n]]}: ${esc(k ? k.name : '?')}</span>`; }).join('')}</div>
+      <button class="chip" id="ul">${S.settings.numbers ? 'Show player initials' : 'Show numbers'}</button>` : ''}
       ${legend()}
       <div class="row" style="margin-top:auto"><button class="btn grow" id="flip">Flip</button><button class="btn grow" id="ed">Edit play</button><button class="btn danger" id="dl">Delete</button></div>
     </div></div>`;
@@ -378,7 +390,7 @@ function renderView() {
   $('#flip').onclick = () => { cancelAnim(); flipPlay(p); save(); drawView(); };
   $('#ed').onclick = () => openEdit(p);
   $('#dl').onclick = () => { sheet(`<h3>Delete ${esc(p.name)}?</h3><div class="row"><button class="btn danger" id="y">Delete</button><button class="btn" id="n">Keep</button></div>`); $('#y').onclick = () => { S.plays = S.plays.filter(x => x !== p); save(); closeSheet(); go('plays'); }; $('#n').onclick = closeSheet; };
-  const ul = $('#ul'); if (ul) ul.onclick = () => { ui.useLineup = !ui.useLineup; renderView(); };
+  const ul = $('#ul'); if (ul) ul.onclick = () => { S.settings.numbers = !S.settings.numbers; save(); renderView(); };
 }
 function cancelAnim() { if (ui.anim) { cancelAnimationFrame(ui.anim); ui.anim = null; } }
 function drawView(tokOverride, ballOverride, hideArrows) {
@@ -575,7 +587,7 @@ function renderEdit() {
     <div class="side">
       <div class="row">${board ? '<div class="title grow">Board</div>' : `<button class="namebtn grow" id="pname">${esc(p.name)}</button>`}<button class="btn pri" id="done">${board ? 'Save as play' : 'Done'}</button></div>
       ${p.underlay ? `<div class="banner">Check this against your image. <button class="btn" id="hideu" style="min-height:34px;padding:2px 8px">${ui.hideU ? 'Show image' : 'Hide image'}</button> <button class="btn" id="delu" style="min-height:34px;padding:2px 8px">Remove image</button></div>` : ''}
-      ${board ? `<div class="row"><button class="chip ${p.court === 'half' ? 'on' : ''}" id="ch">Half</button><button class="chip ${p.court === 'full' ? 'on' : ''}" id="cf">Full</button><button class="btn" id="clr">Clear</button>${S.game ? '<button class="btn" id="ln">Place lineup</button>' : ''}</div>` : ''}
+      ${board ? `<div class="row"><button class="chip ${p.court === 'half' ? 'on' : ''}" id="ch">Half</button><button class="chip ${p.court === 'full' ? 'on' : ''}" id="cf">Full</button><button class="btn" id="clr">Reset</button></div>` : ''}
       <div class="tools">${TOOLS.map(([k, l]) => `<button class="tool" data-t="${k}">${Court.COLOR[k] && k !== 'pen' ? glyph(k) : ''}${l}</button>`).join('')}</div>
       <div class="hint" id="hint"></div>
       <div class="seq" id="seq"></div>
@@ -603,14 +615,9 @@ function renderEdit() {
       $('#no').onclick = closeSheet;
     } else { pruneEmpty(p); persist(); ui.k = 0; ui.view = 'view'; render(); }
   });
-  q('#clr', () => { editPush(); Object.assign(p, { tokens: [], steps: [], pen: [], ball: null }); ui.step = 0; persist(); refreshEdit(); });
-  const setCourt = c => { if (p.court === c) return; editPush(); Object.assign(p, { court: c, cat: c === 'full' ? 'full' : 'half', tokens: [], steps: [], pen: [], ball: null }); ui.step = 0; persist(); renderEdit(); };
+  q('#clr', () => { editPush(); defaultBoard(p); ui.step = 0; ui.sel = null; persist(); refreshEdit(); });
+  const setCourt = c => { if (p.court === c) return; editPush(); Object.assign(p, { court: c, cat: c === 'full' ? 'full' : 'half' }); defaultBoard(p); ui.step = 0; ui.sel = null; persist(); renderEdit(); };
   q('#ch', () => setCourt('half')); q('#cf', () => setCourt('full'));
-  q('#ln', () => {
-    editPush(); const pts = p.court === 'full' ? SPOTS.full : SPOTS.half;
-    p.tokens = SLOTS.map(([s], i) => ({ id: uid(), label: String(i + 1), pid: S.game.lineup[s], side: 'o', x: pts[i][0], y: pts[i][1] }));
-    p.ball = p.tokens[0].id; p.steps = []; persist(); refreshEdit();
-  });
   document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
     const l = b.dataset.add; editPush();
     const ex = p.tokens.findIndex(t => t.label === l && !t.pid);
