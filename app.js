@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -173,6 +173,26 @@ function nextLineup(must = []) {
   const g = S.game;
   return pick({ players: here(), credits: g ? g.credits : {}, last: onCourt(), history: g ? g.rots.map(r => Object.values(r.lineup)) : [], mode: S.settings.fair, must });
 }
+/* Up next: the coach's edited lineup if there is one and everyone in it is still In, otherwise the app's pick */
+function upNext() {
+  const g = S.game, m = g && g.next;
+  if (m) {
+    const ids = Object.values(m), inn = here().map(p => p.id);
+    if (ids.length === 5 && new Set(ids).size === 5 && ids.every(id => inn.includes(id)))
+      return { lineup: m, off: SLOTS.filter(([sl, role]) => !player(m[sl]).pos[role]).length, manual: true };
+    delete g.next;
+  }
+  return nextLineup();
+}
+/* Drop a kid on an Up next spot: he takes it. If he was already up next, the two trade spots. */
+function setNext(pid, slot) {
+  const g = S.game, cur = upNext(); if (!cur) return;
+  const plan = { ...cur.lineup }, had = Object.keys(plan).find(k => plan[k] === pid);
+  if (had === slot) return;
+  snapshot();
+  if (had) { plan[had] = plan[slot]; plan[slot] = pid; } else plan[slot] = pid;
+  g.next = plan; save(); render();
+}
 function snapshot() { ui.undo.push(clone(S.game)); if (ui.undo.length > 40) ui.undo.shift(); }
 function applyLineup(lineup, kind) {
   const g = S.game;
@@ -192,9 +212,9 @@ function startGame(carry) {
   render();
 }
 function doSub() {
-  const res = nextLineup();
+  const res = upNext();
   if (!res) return toast('You need at least 5 players marked In.');
-  snapshot(); applyLineup(res.lineup, 'sub');
+  snapshot(); delete S.game.next; applyLineup(clone(res.lineup), 'sub');
   if (res.off) toast(`${res.off} player${res.off > 1 ? 's' : ''} out of position. Dashed tokens show who.`);
   render();
 }
@@ -235,8 +255,7 @@ function renderGame() {
     return;
   }
   const ids = onCourt(), bench = here().filter(p => !ids.includes(p.id)).sort((x, y) => (g.credits[x.id] || 0) - (g.credits[y.id] || 0));
-  const nx = nextLineup();
-  const nxIds = nx ? Object.values(nx.lineup) : [];
+  const nx = upNext();
   $('#main').innerHTML = `<div class="game">
     <div class="gcol">
       <div class="floor" id="floor"><svg viewBox="0 0 50 47" preserveAspectRatio="xMidYMin slice">${Court.floor('half').replace(/<rect x="-6"[^>]*>/, '')}</svg>
@@ -246,13 +265,14 @@ function renderGame() {
     <div class="gcol">
       <div class="row" style="align-items:stretch"><button class="subbtn" id="sub">Sub<small>Rotation ${g.rots.length + 1} next</small></button>
         <div style="display:flex;flex-direction:column;gap:6px"><button class="btn" id="undo" ${ui.undo.length ? '' : 'disabled'}>Undo</button><button class="btn" id="newg">New game</button></div></div>
-      <div class="next"><span>Up next</span>${nxIds.map(id => { const p = player(id); return `<span class="mini" title="${esc(p.name)}">${esc(initials(p))}</span>`; }).join('')}${nx && nx.off ? `<span class="warn small">${nx.off} out of position</span>` : ''}</div>
+      <div class="next"><span>Up next${nx && nx.manual ? ' (edited)' : ''}</span>${nx ? SLOTS.map(([sl, role]) => { const p = player(nx.lineup[sl]); return `<span class="mini nx ${p.pos[role] ? '' : 'off'}" data-nslot="${sl}" data-pid="${p.id}" title="${esc(p.name)}, ${SLOT_LABEL[sl]}">${esc(initials(p))}<i>${SLOT_LABEL[sl]}</i></span>`; }).join('') : ''}${nx && nx.manual ? '<button class="btn" id="nxreset" style="min-height:36px;padding:2px 10px">Auto</button>' : ''}${nx && nx.off ? `<span class="warn small">${nx.off} out of position</span>` : ''}</div>
       <div class="small" id="passline">${passerOn(g.lineup) ? `Passer: <b>${esc(player(S.passer).name)}</b>` : 'No passer on the floor. Tap a player on the court to set one.'}</div>
       <h3>Bench</h3>
       <div class="bench" id="bench">${bench.map(p => ptok(p, '')).join('') || '<span class="mute">Nobody on the bench.</span>'}</div>
       <div class="log">${logTable()}</div>
     </div></div>`;
   $('#sub').onclick = doSub;
+  const nr = $('#nxreset'); if (nr) nr.onclick = () => { snapshot(); delete g.next; save(); render(); };
   $('#undo').onclick = () => { if (ui.undo.length) { S.game = ui.undo.pop(); save(); render(); } };
   $('#newg').onclick = () => {
     sheet(`<h3>Start a new game</h3><p>Reset starts everyone at zero with your starters. Carry over keeps rotation counts, so kids who played less in the last game go first.</p>
@@ -271,6 +291,7 @@ function logTable() {
   }).join('')}</tr>`).join('')}</table>`;
 }
 /* Drag a token onto another token to swap. A short tap opens that player's options. */
+const tokOf = el => el.classList.contains('nx') ? el : el.querySelector('.tok');
 function bindDrag() {
   document.querySelectorAll('.ptok').forEach(el => {
     el.addEventListener('pointerdown', e => {
@@ -280,10 +301,10 @@ function bindDrag() {
         if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return;
         if (!ghost) { ghost = el.querySelector('.tok').cloneNode(true); ghost.classList.add('ghost'); document.body.append(ghost); el.classList.add('dragging'); }
         ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px';
-        const t = document.elementFromPoint(ev.clientX, ev.clientY), tar = t && t.closest('.ptok');
-        if (over) over.querySelector('.tok').classList.remove('drop');
+        const t = document.elementFromPoint(ev.clientX, ev.clientY), tar = t && t.closest('.ptok, .nx');
+        if (over) tokOf(over).classList.remove('drop');
         over = tar && tar !== el ? tar : null;
-        if (over) over.querySelector('.tok').classList.add('drop');
+        if (over) tokOf(over).classList.add('drop');
       };
       const up = () => {
         window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
@@ -295,6 +316,7 @@ function bindDrag() {
   });
 }
 function dropOn(from, to) {
+  if (to.dataset.nslot) return setNext(from.dataset.pid, to.dataset.nslot);
   const g = S.game, fs = from.dataset.slot, ts = to.dataset.slot;
   snapshot();
   if (fs && ts) { const x = g.lineup[fs]; g.lineup[fs] = g.lineup[ts]; g.lineup[ts] = x; const c = g.rots[g.rots.length - 1].lineup; c[fs] = g.lineup[fs]; c[ts] = g.lineup[ts]; save(); }
