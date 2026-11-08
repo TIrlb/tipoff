@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.8.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -87,6 +87,7 @@ function migratePlay(p) {
   return p;
 }
 S.plays.forEach(migratePlay);
+if (!Array.isArray(S.notes)) S.notes = [];
 const ui = { view: 'game', cat: 'all', play: null, k: 0, undo: [] };
 function toast(m, ms = 2600) { const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, ms); }
 function sheet(html) { $('#sheetCard').innerHTML = html; $('#sheet').hidden = false; }
@@ -107,16 +108,17 @@ const posText = p => [p.pos.pg && 'PG', p.pos.w && 'W', p.pos.p && 'P'].filter(B
 const cr = n => Number.isInteger(n) ? String(n) : String(+n.toFixed(1));
 
 /* ---------- navigation ---------- */
-function go(v) { cancelAnim(); resetLoop(); ui.huddle = false; document.body.classList.remove('huddle'); ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
+function go(v) { if (ui.view === 'notes') flushText();
+ cancelAnim(); resetLoop(); ui.huddle = false; document.body.classList.remove('huddle'); ui.view = v; ui.play = null; ui.undoEd = []; ui.step = 0; render(); }
 document.querySelector('nav').addEventListener('click', e => { const b = e.target.closest('[data-nav]'); if (b) go(b.dataset.nav); });
-function rememberPage() { try { localStorage.setItem(KEY + '.page', JSON.stringify({ view: ui.view, play: ui.play && ui.play.id })); } catch (e) { /* not essential */ } }
+function rememberPage() { try { localStorage.setItem(KEY + '.page', JSON.stringify({ view: ui.view, play: ui.play && ui.play.id, note: ui.noteId })); } catch (e) { /* not essential */ } }
 function restorePage() {
   try {
     const n = JSON.parse(localStorage.getItem(KEY + '.page')); if (!n) return;
     if (n.view === 'view' || n.view === 'edit') {
       const p = S.plays.find(x => x.id === n.play); if (!p) { ui.view = 'plays'; return; }
       Object.assign(ui, { round: 1, castHist: [], cast: null, view: n.view, play: p, k: 0, step: 0, sel: null, atStart: false, tray: false, tool: 'move', undoEd: [], editBoard: false });
-    } else if (['game', 'roster', 'plays', 'board', 'setup'].includes(n.view)) ui.view = n.view;
+    } else if (['game', 'roster', 'plays', 'board', 'notes', 'setup'].includes(n.view)) { ui.view = n.view; ui.noteId = n.note; }
   } catch (e) { /* start on Game */ }
 }
 function render() {
@@ -126,7 +128,7 @@ function render() {
   $('#teamName').textContent = S.team;
   const navOn = ui.view === 'view' || ui.view === 'edit' ? (ui.editBoard ? 'board' : 'plays') : ui.view;
   document.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('on', b.dataset.nav === navOn));
-  ({ game: renderGame, roster: renderRoster, plays: renderPlays, view: renderView, edit: renderEdit, board: () => { ui.editBoard = true; ui.play = S.board; if (!S.board.tokens.length && !S.board.steps.length && !(S.board.pen || []).length) { defaultBoard(S.board); save(); } ui.step = ui.step || 0; ui.tool = ui.tool || 'move'; renderEdit(); }, setup: renderSetup })[ui.view]();
+  ({ game: renderGame, roster: renderRoster, plays: renderPlays, view: renderView, edit: renderEdit, board: () => { ui.editBoard = true; ui.play = S.board; if (!S.board.tokens.length && !S.board.steps.length && !(S.board.pen || []).length) { defaultBoard(S.board); save(); } ui.step = ui.step || 0; ui.tool = ui.tool || 'move'; renderEdit(); }, notes: renderNotes, setup: renderSetup })[ui.view]();
   if (ui.view !== 'board' && ui.view !== 'edit') ui.editBoard = false;
 }
 
@@ -1066,6 +1068,127 @@ function playFromJSON(text) {
     }).filter(Boolean)
   })).filter(s => s.actions.length);
   return { id: uid(), name: String(j.name || 'Imported play'), cat, court, notes: String(j.notes || ''), tokens, ball: holder >= 0 ? tokens[holder].id : null, steps: steps.length ? steps : [{ note: '', actions: [] }], pen: [], uncertain: (j.uncertain || []).join('; '), seq: 2 };
+}
+
+/* ---------- notes: typed text, plus handwriting on paper or a court ---------- */
+const PAGE = [0, 0, 1400, 1000];
+const INK = ['#14284B', '#B3261E', '#1B6E4B', '#6A2C91'];
+const noteBox = n => n.bg === 'half' || n.bg === 'full' ? Court.viewBox(n.bg).split(' ').map(Number) : PAGE;
+const hasContent = n => (n.text || '').trim() || (n.strokes || []).length;
+function noteTitle(n) { const l = (n.text || '').split('\n').map(x => x.trim()).find(Boolean); return l || ((n.strokes || []).length ? 'Sketch' : 'New note'); }
+function noteBg(n) {
+  if (n.bg === 'half' || n.bg === 'full') return Court.floor(n.bg);
+  let h = `<rect x="0" y="0" width="1400" height="1000" fill="#fff"/>`;
+  for (let y = 60; y < 1000; y += 60) h += `<line x1="0" x2="1400" y1="${y}" y2="${y}" stroke="#DCE3EE" stroke-width="2"/>`;
+  return h;
+}
+const strokeD = pts => pts.length === 1 ? `M${pts[0][0]} ${pts[0][1]}l.01 0` : Court.smooth(pts);
+const strokeEl = st => `<path d="${strokeD(st.pts)}" stroke="${st.c}" stroke-width="${st.w}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+const inkSvg = (n, id) => `<svg ${id ? `id="${id}"` : ''} viewBox="${noteBox(n).join(' ')}" preserveAspectRatio="xMidYMid meet" aria-hidden="${id ? 'false' : 'true'}">${noteBg(n)}<g ${id ? 'id="strokes"' : ''}>${(n.strokes || []).map(strokeEl).join('')}</g></svg>`;
+const curNote = () => S.notes.find(n => n.id === ui.noteId);
+function noteChanged(n) { n.edited = Date.now(); save(); const t = $('#nsaved'); if (t) t.textContent = 'Saved'; }
+function noteList() {
+  const list = S.notes.slice().sort((x, y) => (y.edited || 0) - (x.edited || 0));
+  return list.map(n => `<button class="nitem ${n.id === ui.noteId ? 'on' : ''}" data-note="${n.id}">${(n.strokes || []).length ? inkSvg(n) : ''}<span class="grow"><b>${esc(noteTitle(n))}</b><span>${n.edited ? new Date(n.edited).toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + new Date(n.edited).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}</span></span></button>`).join('') || '<p class="mute">No notes yet.</p>';
+}
+function renderNotes() {
+  S.notes = S.notes.filter(n => n.id === ui.noteId || hasContent(n));
+  if (!curNote()) ui.noteId = (S.notes.slice().sort((x, y) => (y.edited || 0) - (x.edited || 0))[0] || {}).id;
+  const n = curNote(), mode = S.settings.noteMode || 'type';
+  ui.inkTool = ui.inkTool || 'pen'; ui.inkColor = ui.inkColor || INK[0]; ui.inkSize = ui.inkSize || 'fine'; ui.inkUndo = ui.inkUndo || [];
+  $('#main').innerHTML = `<div class="notes">
+    <div class="ncol"><button class="btn pri" id="nnew">New note</button><div class="nlist" id="nlist">${noteList()}</div></div>
+    <div class="nedit">${!n ? '<p class="mute">Tap New note to start one.</p>' : `
+      <div class="row"><div class="chipset"><button class="chip ${mode === 'type' ? 'on' : ''}" data-mode="type">Type</button><button class="chip ${mode === 'write' ? 'on' : ''}" data-mode="write">Write</button></div>
+        <span class="grow small mute" id="nsaved"></span><button class="btn danger" id="ndel">Delete</button></div>
+      ${mode === 'type' ? `<textarea class="ntext" id="ntext" placeholder="Practice notes, things to work on, reminders">${esc(n.text || '')}</textarea>` : `
+      <div class="row inkbar">
+        <button class="chip ${ui.inkTool === 'pen' ? 'on' : ''}" data-ink="pen">Pen</button><button class="chip ${ui.inkTool === 'erase' ? 'on' : ''}" data-ink="erase">Eraser</button>
+        ${INK.map(c => `<button class="swatch ${ui.inkColor === c && ui.inkTool === 'pen' ? 'on' : ''}" data-color="${c}" style="background:${c}" aria-label="Ink color"></button>`).join('')}
+        <button class="chip ${ui.inkSize === 'fine' ? 'on' : ''}" data-size="fine">Fine</button><button class="chip ${ui.inkSize === 'bold' ? 'on' : ''}" data-size="bold">Bold</button>
+        <button class="btn" id="nundo" ${ui.inkUndo.length ? '' : 'disabled'}>Undo</button><button class="btn" id="nclear">Clear</button>
+        <select id="nbg" aria-label="Background">${[['paper', 'Paper'], ['half', 'Half court'], ['full', 'Full court']].map(([k, v]) => `<option value="${k}" ${(n.bg || 'paper') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      </div>
+      <div class="inkwrap">${inkSvg(n, 'ink')}</div>`}`}
+    </div></div>`;
+  $('#nnew').onclick = () => {
+    const m = { id: uid(), text: '', strokes: [], bg: 'paper', created: Date.now(), edited: Date.now() };
+    S.notes.unshift(m); ui.noteId = m.id; ui.inkUndo = []; save(); render();
+    const t = $('#ntext'); if (t) t.focus();
+  };
+  $('#nlist').onclick = e => { const b = e.target.closest('[data-note]'); if (b && b.dataset.note !== ui.noteId) { flushText(); ui.noteId = b.dataset.note; ui.inkUndo = []; render(); } };
+  if (!n) return;
+  document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { flushText(); S.settings.noteMode = b.dataset.mode; save(); render(); });
+  $('#ndel').onclick = () => {
+    sheet(`<h3>Delete “${esc(noteTitle(n))}”?</h3><div class="row"><button class="btn danger" id="y">Delete</button><button class="btn" id="no">Keep</button></div>`);
+    $('#y').onclick = () => { S.notes = S.notes.filter(x => x !== n); ui.noteId = null; save(); closeSheet(); render(); };
+    $('#no').onclick = closeSheet;
+  };
+  const ta = $('#ntext');
+  if (ta) {
+    ta.oninput = () => { n.text = ta.value; const t = $('#nsaved'); if (t) t.textContent = ''; clearTimeout(ui.nt); ui.nt = setTimeout(() => { noteChanged(n); const t = document.querySelector('.nitem.on b'); if (t) t.textContent = noteTitle(n); }, 500); };
+    ta.onblur = flushText;
+    return;
+  }
+  const redrawList = () => { $('#nlist').innerHTML = noteList(); };
+  document.querySelectorAll('[data-ink]').forEach(b => b.onclick = () => { ui.inkTool = b.dataset.ink; render(); });
+  document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => { ui.inkColor = b.dataset.color; ui.inkTool = 'pen'; render(); });
+  document.querySelectorAll('[data-size]').forEach(b => b.onclick = () => { ui.inkSize = b.dataset.size; ui.inkTool = 'pen'; render(); });
+  $('#nundo').onclick = () => { const u = ui.inkUndo.pop(); if (u == null) return; n.strokes = JSON.parse(u); noteChanged(n); render(); };
+  $('#nclear').onclick = () => { if (!n.strokes.length) return; ui.inkUndo.push(JSON.stringify(n.strokes)); n.strokes = []; noteChanged(n); render(); };
+  $('#nbg').onchange = e => {
+    const v = e.target.value; if (v === (n.bg || 'paper')) return;
+    const apply = () => { ui.inkUndo = []; n.strokes = []; n.bg = v; noteChanged(n); render(); };
+    if (!n.strokes.length) return apply();
+    sheet(`<h3>Change the background?</h3><p>This clears the drawing on this note. Typed text stays.</p><div class="row"><button class="btn danger" id="y">Clear and change</button><button class="btn" id="no">Cancel</button></div>`);
+    $('#y').onclick = () => { closeSheet(); apply(); };
+    $('#no').onclick = () => { closeSheet(); e.target.value = n.bg || 'paper'; };
+  };
+  bindInk(n, redrawList);
+}
+function flushText() {
+  const ta = $('#ntext'), n = curNote(); clearTimeout(ui.nt);
+  if (ta && n && ta.value !== undefined && (n.text || '') !== ta.value) { n.text = ta.value; }
+  if (ta && n) { noteChanged(n); const t = document.querySelector('.nitem.on b'); if (t) t.textContent = noteTitle(n); }
+}
+/* Finger or Apple Pencil. Once a Pencil is used, finger touches are ignored so a resting palm doesn't draw. */
+function bindInk(n, redrawList) {
+  const svg = $('#ink'), box = noteBox(n), W = box[2], dec = W > 200 ? 1 : 2;
+  const toW = e => { const q = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse()); return [+q.x.toFixed(dec), +q.y.toFixed(dec)]; };
+  const width = () => +(W * (ui.inkSize === 'bold' ? .009 : .0035)).toFixed(dec + 1);
+  const eraseAt = q => { const r = W * .018, before = n.strokes.length; n.strokes = n.strokes.filter(st => !st.pts.some(a => Math.hypot(a[0] - q[0], a[1] - q[1]) < r + st.w / 2)); return before !== n.strokes.length; };
+  let cur = null, el = null, erased = false;
+  svg.onpointerdown = e => {
+    if (e.pointerType === 'pen') ui.penSeen = true;
+    if (e.pointerType === 'touch' && ui.penSeen) return;
+    if (cur) return;
+    e.preventDefault(); svg.setPointerCapture(e.pointerId); ui.inking = true;
+    const q = toW(e); ui.inkUndo.push(JSON.stringify(n.strokes)); if (ui.inkUndo.length > 60) ui.inkUndo.shift();
+    if (ui.inkTool === 'erase') { cur = { erase: true, id: e.pointerId }; erased = eraseAt(q); if (erased) $('#strokes').innerHTML = n.strokes.map(strokeEl).join(''); return; }
+    cur = { id: e.pointerId, s: { c: ui.inkColor, w: width(), pts: [q] } };
+    el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    Object.entries({ stroke: cur.s.c, 'stroke-width': cur.s.w, fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', d: strokeD(cur.s.pts) }).forEach(([k, v]) => el.setAttribute(k, v));
+    $('#strokes').append(el);
+  };
+  svg.onpointermove = e => {
+    if (!cur || e.pointerId !== cur.id) return;
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    if (cur.erase) { let any = false; (evs.length ? evs : [e]).forEach(ev => { if (eraseAt(toW(ev))) any = true; }); if (any) { erased = true; $('#strokes').innerHTML = n.strokes.map(strokeEl).join(''); } return; }
+    const pts = cur.s.pts, min = W * .002;
+    (evs.length ? evs : [e]).forEach(ev => { const q = toW(ev), l = pts[pts.length - 1]; if (Math.hypot(q[0] - l[0], q[1] - l[1]) >= min) pts.push(q); });
+    el.setAttribute('d', 'M' + pts.map(p => p[0] + ' ' + p[1]).join('L'));
+  };
+  const end = e => {
+    if (!cur || e.pointerId !== cur.id) return;
+    if (cur.erase) { if (erased) { noteChanged(n); redrawList(); } else ui.inkUndo.pop(); }
+    else {
+      const st = cur.s; st.pts = st.pts.length > 2 ? Court.simplify(st.pts, W * .0012).map(p => [+p[0].toFixed(dec), +p[1].toFixed(dec)]) : st.pts;
+      n.strokes.push(st); el.setAttribute('d', strokeD(st.pts)); noteChanged(n); redrawList();
+    }
+    cur = null; el = null; erased = false; ui.inking = false;
+    const u = $('#nundo'); if (u) u.disabled = !ui.inkUndo.length;
+  };
+  svg.onpointerup = end; svg.onpointercancel = end;
 }
 
 /* ---------- setup ---------- */

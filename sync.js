@@ -37,6 +37,29 @@ window.Sync = (() => {
       return false;
     });
   }
+  /* Notes merge one note at a time, newest edit wins */
+  const nsig = n => { const o = clone(n); delete o.updatedAt; return hash(JSON.stringify(o)); };
+  function stampNotes() {
+    const c = cfg(), now = Date.now(), ids = new Set();
+    S.notes.forEach(n => { ids.add(n.id); const h = nsig(n); if (c.nbase[n.id] !== h) { c.nbase[n.id] = h; n.updatedAt = now; } });
+    Object.keys(c.nbase).forEach(id => { if (!ids.has(id)) { delete c.nbase[id]; c.ndeleted[id] = now; } });
+  }
+  function mergeNotes(doc) {
+    const c = cfg(), remote = (doc && doc.notes) || {}, deleted = { ...((doc && doc.notesDeleted) || {}) };
+    Object.entries(c.ndeleted).forEach(([k, v]) => { if (!(deleted[k] >= v)) deleted[k] = v; });
+    let changed = false;
+    Object.values(remote).forEach(rn => {
+      const ln = S.notes.find(n => n.id === rn.id);
+      if (ln) { if ((rn.updatedAt || 0) > (ln.updatedAt || 0)) { Object.keys(ln).forEach(k => delete ln[k]); Object.assign(ln, clone(rn)); c.nbase[ln.id] = nsig(ln); changed = true; } }
+      else if (!(deleted[rn.id] >= (rn.updatedAt || 0))) { S.notes.push(clone(rn)); c.nbase[rn.id] = nsig(rn); changed = true; }
+    });
+    S.notes = S.notes.filter(n => {
+      if (deleted[n.id] >= (n.updatedAt || 0)) { delete c.nbase[n.id]; changed = true; return false; }
+      delete deleted[n.id]; return true;
+    });
+    c.ndeleted = deleted;
+    return changed;
+  }
   function stampPlayers() {
     const c = cfg(), now = Date.now(), ids = new Set();
     S.players.forEach(p => { ids.add(p.id); const h = psig(p); if (c.pbase[p.id] !== h) { c.pbase[p.id] = h; p.updatedAt = now; } });
@@ -115,9 +138,11 @@ window.Sync = (() => {
     S.plays.forEach(migratePlay);
     c.deleted = deleted;
     if (mergePlayers(doc)) changedHere = true;
-    const out = { v: 1, plays: {}, deleted, players: {}, playersDeleted: c.pdeleted };
+    if (mergeNotes(doc)) changedHere = true;
+    const out = { v: 1, plays: {}, deleted, players: {}, playersDeleted: c.pdeleted, notes: {}, notesDeleted: c.ndeleted };
     S.plays.forEach(p => { out.plays[p.id] = form(p); });
     S.players.forEach(p => { out.players[p.id] = pform(p); });
+    S.notes.forEach(n => { out.notes[n.id] = clone(n); });
     return { out, changedHere };
   }
 
@@ -129,6 +154,7 @@ window.Sync = (() => {
       if (!S.plays.includes(ui.play)) { toast('That play was deleted on another device.'); go('plays'); }
       else if (ui.view === 'view') { ui.k = Math.min(ui.k, ui.play.steps.length); render(); }
     } else if (ui.view === 'setup') render();
+    else if (ui.view === 'notes' && !ui.inking && (document.activeElement || {}).id !== 'ntext') render();
     else if (ui.view === 'roster' && !['INPUT', 'TEXTAREA'].includes((document.activeElement || {}).tagName)) render();
     else if (ui.view === 'game' && !document.querySelector('.ghost')) render();
   }
@@ -142,9 +168,9 @@ window.Sync = (() => {
       for (let tries = 0; tries < 4; tries++) {
         const { doc, sha } = await pull();
         if (!c.joined) { if (doc) S.plays = S.plays.filter(p => !p.sample); c.joined = true; }
-        c.pbase = c.pbase || {}; c.pdeleted = c.pdeleted || {};
+        c.pbase = c.pbase || {}; c.pdeleted = c.pdeleted || {}; c.nbase = c.nbase || {}; c.ndeleted = c.ndeleted || {};
         if (doc) adoptSameNames(doc);
-        stamp(); stampPlayers();
+        stamp(); stampPlayers(); stampNotes();
         const { out, changedHere } = merge(doc);
         const same = doc && JSON.stringify(sortDoc(doc)) === JSON.stringify(sortDoc(out));
         save0();
@@ -165,16 +191,17 @@ window.Sync = (() => {
   }
   function sortDoc(d) {
     const k = o => Object.keys(o || {}).sort().reduce((a, x) => (a[x] = o[x], a), {});
-    return { plays: k(d.plays), deleted: k(d.deleted), players: k(d.players), playersDeleted: k(d.playersDeleted) };
+    return { plays: k(d.plays), deleted: k(d.deleted), players: k(d.players), playersDeleted: k(d.playersDeleted), notes: k(d.notes), notesDeleted: k(d.notesDeleted) };
   }
   const save0 = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* surfaced by save() on the next edit */ } };
 
   /* Called after any save: push soon, only if plays actually changed */
   function touched() {
     const c = cfg(); if (!c || !c.joined) return;
-    const pb = c.pbase || {};
+    const pb = c.pbase || {}, nb = c.nbase || {};
     const dirty = S.plays.some(p => c.base[p.id] !== sig(p)) || Object.keys(c.base).some(id => !S.plays.some(p => p.id === id))
-      || S.players.some(p => pb[p.id] !== psig(p)) || Object.keys(pb).some(id => !S.players.some(p => p.id === id));
+      || S.players.some(p => pb[p.id] !== psig(p)) || Object.keys(pb).some(id => !S.players.some(p => p.id === id))
+      || S.notes.some(n => nb[n.id] !== nsig(n)) || Object.keys(nb).some(id => !S.notes.some(n => n.id === id));
     if (!dirty) return;
     clearTimeout(timer); timer = setTimeout(run, 3000); state = 'pending'; show();
   }
@@ -188,7 +215,7 @@ window.Sync = (() => {
     return '';
   }
   async function connect(repo, token) {
-    S.sync = { repo, token, base: {}, deleted: {}, pbase: {}, pdeleted: {}, joined: false, last: 0 };
+    S.sync = { repo, token, base: {}, deleted: {}, pbase: {}, pdeleted: {}, nbase: {}, ndeleted: {}, joined: false, last: 0 };
     const r = await req('');
     if (!r.ok) { const e = httpErr(r); S.sync = null; save0(); throw e; }
     state = 'off'; save0(); await run();
