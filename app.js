@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.8.1';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -267,7 +267,8 @@ function renderGame() {
     <div class="gcol">
       <div class="row" style="align-items:stretch"><button class="subbtn" id="sub">Sub<small>Rotation ${g.rots.length + 1} next</small></button>
         <div style="display:flex;flex-direction:column;gap:6px"><button class="btn" id="undo" ${ui.undo.length ? '' : 'disabled'}>Undo</button><button class="btn" id="newg">New game</button></div></div>
-      <div class="next"><span>Up next${nx && nx.manual ? ' (edited)' : ''}</span>${nx ? SLOTS.map(([sl, role]) => { const p = player(nx.lineup[sl]); return `<span class="mini nx ${p.pos[role] ? '' : 'off'}" data-nslot="${sl}" data-pid="${p.id}" title="${esc(p.name)}, ${SLOT_LABEL[sl]}">${esc(initials(p))}<i>${SLOT_LABEL[sl]}</i></span>`; }).join('') : ''}${nx && nx.manual ? '<button class="btn" id="nxreset" style="min-height:36px;padding:2px 10px">Auto</button>' : ''}${nx && nx.off ? `<span class="warn small">${nx.off} out of position</span>` : ''}</div>
+      <div class="next"><div class="nxhead"><b>Up next${nx && nx.manual ? ' (edited)' : ''}</b>${nx && nx.off ? `<span class="warn small">${nx.off} out of position</span>` : ''}${nx && nx.manual ? '<button class="btn" id="nxreset" style="min-height:34px;padding:2px 10px">Auto</button>' : ''}</div>
+        <div class="nxrow">${nx ? SLOTS.map(([sl, role]) => { const p = player(nx.lineup[sl]); return `<span class="nx" data-nslot="${sl}" data-pid="${p.id}" title="${esc(p.name)}, ${SLOT_LABEL[sl]}"><span class="mini ${p.pos[role] ? '' : 'off'}">${esc(initials(p))}</span><span class="nxname">${esc(p.name.split(' ')[0])}</span><span class="nxpos">${SLOT_LABEL[sl]}</span></span>`; }).join('') : ''}</div></div>
       <div class="small" id="passline">${passerOn(g.lineup) ? `Passer: <b>${esc(player(S.passer).name)}</b>` : 'No passer on the floor. Tap a player on the court to set one.'}</div>
       <h3>Bench</h3>
       <div class="bench" id="bench">${bench.map(p => ptok(p, '')).join('') || '<span class="mute">Nobody on the bench.</span>'}</div>
@@ -293,7 +294,7 @@ function logTable() {
   }).join('')}</tr>`).join('')}</table>`;
 }
 /* Drag a token onto another token to swap. A short tap opens that player's options. */
-const tokOf = el => el.classList.contains('nx') ? el : el.querySelector('.tok');
+const tokOf = el => el.classList.contains('nx') ? el.querySelector('.mini') : el.querySelector('.tok');
 function bindDrag() {
   document.querySelectorAll('.ptok').forEach(el => {
     el.addEventListener('pointerdown', e => {
