@@ -1,5 +1,5 @@
 /* Tipoff: rotations and playbook for youth basketball. All data stays on this device. */
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.9.0';
 const KEY = 'tipoff.v1';
 const { SLOTS, pick } = Rotation;
 const { esc, f } = Court;
@@ -137,7 +137,7 @@ function renderRoster() {
   const P = S.players.slice().sort((x, y) => x.name.localeCompare(y.name)), st = P.filter(p => p.starter).length, inn = here().length;
   const has = k => here().filter(p => p.pos[k]).length;
   $('#main').innerHTML = `<div class="pad">
-    <div class="row"><h2 class="grow">Roster</h2><button class="btn pri" data-a="add">Add player</button></div>
+    <div class="row"><h2 class="grow">Roster</h2><button class="btn gold" data-a="pickst">Pick starters</button><button class="btn pri" data-a="add">Add player</button></div>
     <div class="counts small"><span>${inn} in</span><span class="${st > 5 ? 'warn' : ''}">${st} of 5 starters</span><span>${has('pg')} PG</span><span>${has('w')} wings</span><span>${has('p')} posts</span></div>
     <div class="rtable">${P.map(p => `<div class="rrow ${isOut(p) ? 'isout' : ''}" data-id="${p.id}">
       <div class="ini">${esc(initials(p))}</div>
@@ -148,15 +148,19 @@ function renderRoster() {
         <button class="chip ${p.pos.w ? 'on' : ''}" data-pos="w" aria-pressed="${!!p.pos.w}">Wing</button>
         <button class="chip ${p.pos.p ? 'on' : ''}" data-pos="p" aria-pressed="${!!p.pos.p}">Post</button>
       </div>
+      <div class="starts" title="Games started"><button data-a="sm" aria-label="One fewer start">−</button><span><b>${p.starts || 0}</b>starts</span><button data-a="sp" aria-label="One more start">+</button></div>
       <button class="chip star ${p.starter ? 'on' : ''}" data-a="starter" aria-pressed="${!!p.starter}">Starter</button>
       <button class="chip out ${isOut(p) ? 'on' : ''}" data-a="out" aria-pressed="${isOut(p)}">${isOut(p) ? 'Out' : 'In'}</button>
       <button class="x" data-a="del" aria-label="Remove ${esc(p.name)}">×</button></div>`).join('') || '<p class="mute">Add your players to get started.</p>'}</div></div>`;
   $('#main').onclick = e => {
     const row = e.target.closest('.rrow'), p = row && player(row.dataset.id), b = e.target.closest('button');
     if (!b) return;
+    if (b.dataset.a === 'pickst') return pickStarters();
     if (b.dataset.a === 'add') { const q = { id: uid(), name: 'Player ' + (P.length + 1), num: '', pos: { pg: false, w: true, p: false }, starter: false }; S.players.push(q); save(); render(); const i = document.querySelector(`[data-id="${q.id}"] input`); i.focus(); i.select(); return; }
     if (!p) return;
     if (b.dataset.pos) p.pos[b.dataset.pos] = !p.pos[b.dataset.pos];
+    if (b.dataset.a === 'sm') p.starts = Math.max(0, (p.starts || 0) - 1);
+    if (b.dataset.a === 'sp') p.starts = (p.starts || 0) + 1;
     if (b.dataset.a === 'starter') { if (!p.starter && st >= 5) return toast('You already have 5 starters. Remove one first.'); p.starter = !p.starter; }
     if (b.dataset.a === 'out') setOut(p, !isOut(p));
     if (b.dataset.a === 'del') { sheet(`<h3>Remove ${esc(p.name)}?</h3><div class="row"><button class="btn danger" id="yes">Remove</button><button class="btn" id="no">Keep</button></div>`); $('#yes').onclick = () => { removeFromCourt(p); S.players = S.players.filter(q => q !== p); save(); closeSheet(); render(); }; $('#no').onclick = closeSheet; return; }
@@ -164,6 +168,31 @@ function renderRoster() {
   };
   $('#main').onchange = e => { const row = e.target.closest('.rrow'); if (!row || !e.target.dataset.f) return; player(row.dataset.id)[e.target.dataset.f] = e.target.value.trim() || (e.target.dataset.f === 'name' ? 'Player' : ''); save(); render(); };
 }
+/* Starters: kids marked In with the fewest starts, still 1 PG, 2 wings, 2 posts. Ties are shuffled. */
+function proposeStarters() {
+  const kids = here().slice();
+  for (let i = kids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [kids[i], kids[j]] = [kids[j], kids[i]]; }
+  const credits = {}; kids.forEach(p => { credits[p.id] = p.starts || 0; });
+  return pick({ players: kids, credits, mode: S.settings.fair });
+}
+function pickStarters() {
+  if (here().length < 5) return toast('You need at least 5 players marked In.');
+  const r = proposeStarters(), ids = Object.values(r.lineup);
+  sheet(`<h3>Starters</h3><p class="small mute">Fewest starts first, then filled by position. Kids marked Out are skipped.</p>
+    ${SLOTS.map(([sl, role]) => { const p = player(r.lineup[sl]); return `<div class="row"><b style="width:46px">${SLOT_LABEL[sl]}</b><span class="grow">${esc(p.name)}${p.pos[role] ? '' : ' <span class="warn small">out of position</span>'}</span><span class="mute small">${p.starts || 0} starts</span></div>`; }).join('')}
+    <div class="row"><button class="btn pri" id="use">Use these</button><button class="btn" id="again">Shuffle again</button><button class="btn" id="no">Cancel</button></div>`);
+  $('#use').onclick = () => { S.players.forEach(p => { p.starter = ids.includes(p.id); }); save(); closeSheet(); render(); toast('Starters set'); };
+  $('#again').onclick = pickStarters;
+  $('#no').onclick = closeSheet;
+}
+/* A start counts once the first Sub happens, or when a game that ran a few minutes is ended without one */
+function countStarts(force) {
+  const g = S.game; if (!g || !g.rots.length || S.startsCounted === g.id) return;
+  if (!force && g.rots.length < 1) return;
+  Object.values(g.rots[0].lineup).forEach(id => { const p = player(id); if (p) { p.starts = (p.starts || 0) + 1; p.lastStart = g.rots[0].at; } });
+  S.startsCounted = g.id; save();
+}
+function endingGame() { const g = S.game; if (g && g.rots.length === 1 && Date.now() - g.rots[0].at > 180000) countStarts(true); }
 function setOut(p, out) {
   p.out = out;
   if (out) removeFromCourt(p);
@@ -206,7 +235,8 @@ function applyLineup(lineup, kind) {
 function startGame(carry) {
   const prev = S.game;
   if (here().length < 5) return toast('You need at least 5 players marked In.');
-  S.game = { credits: carry && prev ? clone(prev.credits) : {}, rots: [], lineup: null };
+  endingGame();
+  S.game = { id: uid(), credits: carry && prev ? clone(prev.credits) : {}, rots: [], lineup: null };
   ui.undo = [];
   const st = here().filter(p => p.starter);
   const res = st.length && !carry ? nextLineup(st.slice(0, 5)) : nextLineup();
@@ -216,6 +246,8 @@ function startGame(carry) {
 function doSub() {
   const res = upNext();
   if (!res) return toast('You need at least 5 players marked In.');
+  if (!S.game.id) S.game.id = uid();
+  if (S.game.rots.length === 1) countStarts(true);
   snapshot(); delete S.game.next; applyLineup(clone(res.lineup), 'sub');
   if (res.off) toast(`${res.off} player${res.off > 1 ? 's' : ''} out of position. Dashed tokens show who.`);
   render();
@@ -281,7 +313,7 @@ function renderGame() {
     sheet(`<h3>Start a new game</h3><p>Reset starts everyone at zero with your starters. Carry over keeps rotation counts, so kids who played less in the last game go first.</p>
       <button class="btn pri" id="r">Reset counts, use starters</button><button class="btn" id="c">Carry over counts</button><button class="btn" id="e">End game</button><button class="btn" id="n">Cancel</button>`);
     $('#r').onclick = () => { closeSheet(); startGame(false); }; $('#c').onclick = () => { closeSheet(); startGame(true); };
-    $('#e').onclick = () => { closeSheet(); S.game = null; ui.undo = []; save(); render(); }; $('#n').onclick = closeSheet;
+    $('#e').onclick = () => { closeSheet(); endingGame(); S.game = null; ui.undo = []; save(); render(); }; $('#n').onclick = closeSheet;
   };
   bindDrag();
 }

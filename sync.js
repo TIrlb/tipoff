@@ -16,7 +16,7 @@ window.Sync = (() => {
   }
   const sig = p => { const o = form(p); delete o.updatedAt; delete o.created; return hash(JSON.stringify(o)); };
 
-  const pform = p => ({ id: p.id, name: p.name, num: p.num || '', pos: { pg: !!p.pos.pg, w: !!p.pos.w, p: !!p.pos.p }, starter: !!p.starter, out: !!p.out, updatedAt: p.updatedAt || 0 });
+  const pform = p => ({ id: p.id, name: p.name, num: p.num || '', pos: { pg: !!p.pos.pg, w: !!p.pos.w, p: !!p.pos.p }, starter: !!p.starter, out: !!p.out, starts: p.starts || 0, lastStart: p.lastStart || 0, updatedAt: p.updatedAt || 0 });
   const psig = p => { const o = pform(p); delete o.updatedAt; return hash(JSON.stringify(o)); };
   const norm = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
